@@ -1,0 +1,54 @@
+{
+  "name": "syncdrop-ai",
+  "version": "0.1.0",
+  "description": "Cross-platform cloud file transfer app with AI-generated filenames.",
+  "main": "electron/main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "electron": "concurrently -k \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
+    "build": "vite build",
+    "build:electron": "npm run build",
+    "dist": "electron-builder",
+    "cap:add:android": "cap add android",
+    "cap:sync": "cap sync",
+    "cap:open:android": "cap open android"
+  },
+  "keywords": [
+    "electron",
+    "capacitor",
+    "supabase",
+    "file-transfer",
+    "openai"
+  ],
+  "author": "pachisiav11",
+  "license": "MIT",
+  "dependencies": {
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/core": "^7.4.3",
+    "@supabase/supabase-js": "^2.50.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.4.3",
+    "concurrently": "^9.2.0",
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12",
+    "vite": "^7.0.0",
+    "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "com.syncdrop.ai",
+    "productName": "SyncDrop AI",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "dist-app/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  }
+}

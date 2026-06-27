@@ -1,0 +1,8 @@
+{
+  "appId": "com.syncdrop.ai",
+  "appName": "SyncDrop AI",
+  "webDir": "dist-app",
+  "server": {
+    "androidScheme": "https"
+  }
+}
