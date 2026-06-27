@@ -41,8 +41,18 @@ cd android
 
 Create `.env` from `.env.example`.
 
+The browser client reads these Vite-exposed values:
+
+```powershell
+VITE_SUPABASE_URL=
+VITE_SUPABASE_ANON_KEY=
+VITE_SUPABASE_BUCKET=files
+```
+
 Do not ship production OpenAI keys inside Electron or Android builds. The intended production path is to keep the OpenAI API key in a Supabase Edge Function secret and call that function from the client.
 
 ## Supabase
 
-The initial schema is in `supabase/schema.sql`. Create a private storage bucket named `files`, enable Row Level Security, and deploy the `suggest-filename` function for AI naming.
+The schema and RLS policy examples are in `supabase/schema.sql`. Create a private storage bucket named `files`, enable Row Level Security, and deploy the `suggest-filename` function for AI naming.
+
+Phase 3 supports email magic-link auth, metadata loading from `public.files`, uploads into Supabase Storage, metadata inserts, signed download URLs, and delete flows. Without Supabase env vars, the app stays in local mock mode for UI development.

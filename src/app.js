@@ -1,4 +1,5 @@
 import "./styles.css";
+import { isSupabaseConfigured, storageBucket, supabase } from "./supabaseClient.js";
 
 const STORAGE_KEYS = {
   files: "syncdrop.files",
@@ -41,9 +42,14 @@ const app = document.querySelector("#app");
 let files = loadJson(STORAGE_KEYS.files, sampleFiles);
 let settings = loadJson(STORAGE_KEYS.settings, DEFAULT_SETTINGS);
 let activeView = "files";
+let session = null;
+let authEmail = "";
+let isBusy = false;
 let transferStatus = {
-  label: "Ready",
-  detail: "Choose or drop files to simulate a local transfer.",
+  label: isSupabaseConfigured ? "Connect" : "Local mode",
+  detail: isSupabaseConfigured
+    ? "Sign in to sync files through Supabase."
+    : "Add Supabase env vars to enable cloud sync.",
   progress: 0
 };
 
@@ -61,7 +67,7 @@ function saveJson(key, value) {
 }
 
 function escapeHtml(value) {
-  return String(value)
+  return String(value ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
@@ -76,9 +82,9 @@ function formatBytes(bytes) {
   return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
-function suggestLocalName(file) {
-  const extension = file.name.match(/(\.[A-Za-z0-9]{1,12})$/)?.[1]?.toLowerCase() ?? "";
-  const base = file.name
+function cleanFilename(filename) {
+  const extension = filename.match(/(\.[A-Za-z0-9]{1,12})$/)?.[1]?.toLowerCase() ?? "";
+  const base = filename
     .replace(/(\.[A-Za-z0-9]{1,12})$/, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -89,10 +95,19 @@ function suggestLocalName(file) {
   return `${base || "untitled-file"}${extension}`;
 }
 
-function queueFiles(fileList) {
-  const queuedFiles = [...fileList].map((file) => ({
+function makeStoragePath(userId, id, filename) {
+  return `${userId}/${id}-${cleanFilename(filename)}`;
+}
+
+function setStatus(label, detail, progress = transferStatus.progress) {
+  transferStatus = { label, detail, progress };
+  render();
+}
+
+function localFileRecord(file) {
+  return {
     id: crypto.randomUUID(),
-    filename_ai: settings.autoRename ? suggestLocalName(file) : file.name,
+    filename_ai: settings.autoRename ? cleanFilename(file.name) : file.name,
     filename_original: file.name,
     mime_type: file.type || "application/octet-stream",
     size: file.size,
@@ -100,29 +115,147 @@ function queueFiles(fileList) {
     status: "queued",
     progress: 0,
     created_at: new Date().toISOString()
+  };
+}
+
+async function initSupabase() {
+  if (!isSupabaseConfigured) return;
+
+  const { data } = await supabase.auth.getSession();
+  session = data.session;
+
+  supabase.auth.onAuthStateChange((_event, nextSession) => {
+    session = nextSession;
+    if (session) {
+      loadCloudFiles();
+    } else {
+      files = loadJson(STORAGE_KEYS.files, sampleFiles);
+      render();
+    }
+  });
+
+  if (session) {
+    await loadCloudFiles();
+  }
+}
+
+async function signInWithEmail(email) {
+  if (!supabase || !email) return;
+  isBusy = true;
+  setStatus("Sending link", "Check your email for the Supabase magic link.", 20);
+
+  const { error } = await supabase.auth.signInWithOtp({
+    email,
+    options: {
+      emailRedirectTo: window.location.href
+    }
+  });
+
+  isBusy = false;
+  setStatus(error ? "Sign-in failed" : "Link sent", error?.message ?? "Open the link on this device to finish sign-in.", error ? 0 : 100);
+}
+
+async function signOut() {
+  if (!supabase) return;
+  await supabase.auth.signOut();
+  session = null;
+  setStatus("Signed out", "Local sample files are shown until you sign in again.", 0);
+}
+
+async function loadCloudFiles() {
+  if (!session) return;
+  isBusy = true;
+  setStatus("Refreshing", "Loading file metadata from Supabase.", 35);
+
+  const { data, error } = await supabase
+    .from("files")
+    .select("id, filename_ai, filename_original, storage_path, mime_type, size, uploaded_from, created_at")
+    .order("created_at", { ascending: false });
+
+  isBusy = false;
+
+  if (error) {
+    setStatus("Refresh failed", error.message, 0);
+    return;
+  }
+
+  files = data.map((file) => ({
+    ...file,
+    status: "synced",
+    progress: 100
   }));
+  setStatus("Synced", `${files.length} cloud file${files.length === 1 ? "" : "s"} loaded.`, 100);
+}
 
-  if (queuedFiles.length === 0) return;
+async function queueFiles(fileList) {
+  const selectedFiles = [...fileList];
+  if (selectedFiles.length === 0) return;
 
+  if (isSupabaseConfigured && session) {
+    await uploadCloudFiles(selectedFiles);
+    return;
+  }
+
+  const queuedFiles = selectedFiles.map(localFileRecord);
   files = [...queuedFiles, ...files];
   saveJson(STORAGE_KEYS.files, files);
-  transferStatus = {
-    label: "Queued",
-    detail: `${queuedFiles.length} file${queuedFiles.length === 1 ? "" : "s"} ready to sync.`,
-    progress: 0
-  };
-  render();
+  setStatus("Queued", `${queuedFiles.length} file${queuedFiles.length === 1 ? "" : "s"} ready to sync.`, 0);
   simulateTransfers(queuedFiles.map((file) => file.id));
+}
+
+async function uploadCloudFiles(selectedFiles) {
+  if (!session) return;
+  isBusy = true;
+
+  for (let index = 0; index < selectedFiles.length; index += 1) {
+    const file = selectedFiles[index];
+    const id = crypto.randomUUID();
+    const filename_ai = settings.autoRename ? cleanFilename(file.name) : file.name;
+    const storage_path = makeStoragePath(session.user.id, id, filename_ai);
+    const progressBase = Math.round((index / selectedFiles.length) * 100);
+
+    setStatus("Uploading", `${file.name} to Supabase storage.`, progressBase);
+
+    const upload = await supabase.storage.from(storageBucket).upload(storage_path, file, {
+      contentType: file.type || "application/octet-stream",
+      upsert: false
+    });
+
+    if (upload.error) {
+      isBusy = false;
+      setStatus("Upload failed", upload.error.message, progressBase);
+      return;
+    }
+
+    const insert = await supabase.from("files").insert({
+      id,
+      user_id: session.user.id,
+      filename_ai,
+      filename_original: file.name,
+      storage_path,
+      mime_type: file.type || "application/octet-stream",
+      size: file.size,
+      uploaded_from: window.syncdrop?.platform ?? "web"
+    });
+
+    if (insert.error) {
+      await supabase.storage.from(storageBucket).remove([storage_path]);
+      isBusy = false;
+      setStatus("Metadata failed", insert.error.message, progressBase);
+      return;
+    }
+  }
+
+  isBusy = false;
+  await loadCloudFiles();
 }
 
 function simulateTransfers(ids) {
   ids.forEach((id, index) => {
-    const startDelay = index * 450;
-
     setTimeout(() => {
-      updateFile(id, { status: "uploading", progress: 8 });
+      updateLocalFile(id, { status: "uploading", progress: 8 });
       tickUpload(id);
-    }, startDelay);
+    }, index * 450);
   });
 }
 
@@ -131,7 +264,7 @@ function tickUpload(id) {
   if (!file || file.status !== "uploading") return;
 
   const nextProgress = Math.min(100, file.progress + 14 + Math.round(Math.random() * 18));
-  updateFile(id, {
+  updateLocalFile(id, {
     progress: nextProgress,
     status: nextProgress >= 100 ? "synced" : "uploading"
   });
@@ -141,7 +274,7 @@ function tickUpload(id) {
   }
 }
 
-function updateFile(id, patch) {
+function updateLocalFile(id, patch) {
   files = files.map((file) => (file.id === id ? { ...file, ...patch } : file));
   saveJson(STORAGE_KEYS.files, files);
   updateTransferStatus();
@@ -159,22 +292,57 @@ function updateTransferStatus() {
     return;
   }
 
-  const average = Math.round(
-    activeFiles.reduce((sum, file) => sum + file.progress, 0) / activeFiles.length
-  );
-
   transferStatus = {
     label: "Syncing",
     detail: `${activeFiles.length} active transfer${activeFiles.length === 1 ? "" : "s"}.`,
-    progress: average
+    progress: Math.round(activeFiles.reduce((sum, file) => sum + file.progress, 0) / activeFiles.length)
   };
 }
 
-function removeFile(id) {
-  files = files.filter((file) => file.id !== id);
+async function removeFile(id) {
+  const file = files.find((item) => item.id === id);
+  if (!file) return;
+
+  if (isSupabaseConfigured && session && file.storage_path) {
+    const removeStorage = await supabase.storage.from(storageBucket).remove([file.storage_path]);
+    if (removeStorage.error) {
+      setStatus("Delete failed", removeStorage.error.message, 0);
+      return;
+    }
+
+    const removeMetadata = await supabase.from("files").delete().eq("id", id);
+    if (removeMetadata.error) {
+      setStatus("Metadata delete failed", removeMetadata.error.message, 0);
+      return;
+    }
+
+    await loadCloudFiles();
+    return;
+  }
+
+  files = files.filter((item) => item.id !== id);
   saveJson(STORAGE_KEYS.files, files);
   updateTransferStatus();
   render();
+}
+
+async function downloadFile(id) {
+  const file = files.find((item) => item.id === id);
+  if (!file) return;
+
+  if (isSupabaseConfigured && session && file.storage_path) {
+    const { data, error } = await supabase.storage.from(storageBucket).createSignedUrl(file.storage_path, 60);
+    if (error) {
+      setStatus("Download failed", error.message, 0);
+      return;
+    }
+
+    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+    setStatus("Download ready", "Signed URL opened in a new tab.", 100);
+    return;
+  }
+
+  setStatus("Download mocked", "Real download links are available after signing into Supabase.", transferStatus.progress);
 }
 
 function saveSettings(form) {
@@ -184,12 +352,46 @@ function saveSettings(form) {
     wifiOnly: form.wifiOnly.checked
   };
   saveJson(STORAGE_KEYS.settings, settings);
-  transferStatus = {
-    label: "Settings saved",
-    detail: "Local preferences will be used for the next transfer.",
-    progress: transferStatus.progress
-  };
-  render();
+  setStatus("Settings saved", "Local preferences will be used for the next transfer.", transferStatus.progress);
+}
+
+function renderAuthPanel() {
+  if (!isSupabaseConfigured) {
+    return `
+      <section class="auth-panel" aria-label="Connection status">
+        <strong>Supabase not configured</strong>
+        <span>Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable cloud sync.</span>
+      </section>
+    `;
+  }
+
+  if (session) {
+    return `
+      <section class="auth-panel" aria-label="Connection status">
+        <div>
+          <strong>Signed in</strong>
+          <span>${escapeHtml(session.user.email)}</span>
+        </div>
+        <div class="auth-actions">
+          <button type="button" data-action="refresh" ${isBusy ? "disabled" : ""}>Refresh</button>
+          <button type="button" data-action="sign-out" ${isBusy ? "disabled" : ""}>Sign out</button>
+        </div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="auth-panel" aria-label="Connection status">
+      <div>
+        <strong>Cloud sync</strong>
+        <span>Sign in with a Supabase magic link.</span>
+      </div>
+      <form id="auth-form" class="auth-form">
+        <input name="email" type="email" placeholder="you@example.com" value="${escapeHtml(authEmail)}" required />
+        <button type="submit" ${isBusy ? "disabled" : ""}>Send link</button>
+      </form>
+    </section>
+  `;
 }
 
 function renderFile(file) {
@@ -227,7 +429,7 @@ function renderSettings() {
     <section class="settings-panel" aria-labelledby="settings-heading">
       <div>
         <h2 id="settings-heading">Settings</h2>
-        <p>Stored locally for now. Supabase account sync arrives in the integration phase.</p>
+        <p>Stored locally. Cloud file data is tied to the signed-in Supabase account.</p>
       </div>
       <form id="settings-form">
         <label>
@@ -275,18 +477,20 @@ function render() {
         </nav>
       </header>
 
+      ${renderAuthPanel()}
+
       <section class="drop-zone" aria-label="File upload drop zone">
         <input id="file-input" type="file" multiple />
         <label for="file-input">
           <strong>Drop files here</strong>
-          <span>or choose files to add a mocked transfer from this device</span>
+          <span>${session ? "Files will upload to Supabase storage" : "or choose files to add a local mocked transfer"}</span>
         </label>
       </section>
 
       <section class="transfer-panel" aria-live="polite">
         <div>
-          <strong>${transferStatus.label}</strong>
-          <span>${transferStatus.detail}</span>
+          <strong>${escapeHtml(transferStatus.label)}</strong>
+          <span>${escapeHtml(transferStatus.detail)}</span>
         </div>
         <progress value="${transferStatus.progress}" max="100"></progress>
       </section>
@@ -302,6 +506,7 @@ function attachEvents() {
   const fileInput = document.querySelector("#file-input");
   const dropZone = document.querySelector(".drop-zone");
   const settingsForm = document.querySelector("#settings-form");
+  const authForm = document.querySelector("#auth-form");
 
   fileInput.addEventListener("change", (event) => {
     queueFiles(event.target.files);
@@ -339,20 +544,23 @@ function attachEvents() {
   });
 
   document.querySelectorAll("[data-action='download']").forEach((button) => {
-    button.addEventListener("click", () => {
-      transferStatus = {
-        label: "Download mocked",
-        detail: "Real download links will be connected after Supabase storage is added.",
-        progress: transferStatus.progress
-      };
-      render();
-    });
+    button.addEventListener("click", () => downloadFile(button.dataset.id));
   });
+
+  document.querySelector("[data-action='refresh']")?.addEventListener("click", loadCloudFiles);
+  document.querySelector("[data-action='sign-out']")?.addEventListener("click", signOut);
 
   settingsForm?.addEventListener("submit", (event) => {
     event.preventDefault();
     saveSettings(settingsForm);
   });
+
+  authForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    authEmail = authForm.email.value.trim();
+    signInWithEmail(authEmail);
+  });
 }
 
 render();
+initSupabase();

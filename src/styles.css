@@ -49,6 +49,11 @@ button.danger {
   color: #a51d2d;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
 .shell {
   width: min(1120px, calc(100vw - 32px));
   margin: 0 auto;
@@ -128,12 +133,48 @@ button.danger {
   line-height: 1.1;
 }
 
+.auth-panel,
 .transfer-panel,
 .settings-panel,
 .file-row {
   background: #ffffff;
   border: 1px solid #d8e0eb;
   border-radius: 8px;
+}
+
+.auth-panel {
+  align-items: center;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr auto;
+  margin-top: 18px;
+  padding: 14px 16px;
+}
+
+.auth-panel > div {
+  display: grid;
+  gap: 4px;
+}
+
+.auth-panel span {
+  color: #596579;
+}
+
+.auth-form,
+.auth-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.auth-form input {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  min-height: 38px;
+  min-width: min(260px, 100%);
+  padding: 0.55rem 0.7rem;
 }
 
 .transfer-panel {
@@ -292,6 +333,7 @@ progress {
   }
 
   .topbar,
+  .auth-panel,
   .transfer-panel,
   .settings-panel {
     align-items: stretch;
@@ -304,6 +346,16 @@ progress {
 
   .topbar nav {
     justify-content: flex-start;
+  }
+
+  .auth-form,
+  .auth-actions {
+    justify-content: flex-start;
+  }
+
+  .auth-form input,
+  .auth-form button {
+    flex: 1 1 180px;
   }
 
   .topbar nav button {

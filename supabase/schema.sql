@@ -28,4 +28,25 @@ create index if not exists files_user_created_at_idx
   on public.files (user_id, created_at desc);
 
 -- Create a private Supabase Storage bucket named "files" separately.
--- Storage object RLS policies should restrict paths by authenticated user id.
+-- Client uploads use paths shaped as: {auth.uid()}/{file-id}-{filename}
+
+create policy "users can read their own storage objects"
+  on storage.objects for select
+  using (
+    bucket_id = 'files'
+    and auth.uid()::text = (storage.foldername(name))[1]
+  );
+
+create policy "users can upload their own storage objects"
+  on storage.objects for insert
+  with check (
+    bucket_id = 'files'
+    and auth.uid()::text = (storage.foldername(name))[1]
+  );
+
+create policy "users can delete their own storage objects"
+  on storage.objects for delete
+  using (
+    bucket_id = 'files'
+    and auth.uid()::text = (storage.foldername(name))[1]
+  );
