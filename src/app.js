@@ -95,6 +95,41 @@ function cleanFilename(filename) {
   return `${base || "untitled-file"}${extension}`;
 }
 
+function getExtension(filename) {
+  return filename.match(/(\.[A-Za-z0-9]{1,12})$/)?.[1]?.toLowerCase() ?? "";
+}
+
+function isValidAiFilename(value, extension) {
+  if (!value || value.length > 80) return false;
+  if (extension && !value.endsWith(extension)) return false;
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*(\.[a-z0-9]{1,12})?$/.test(value);
+}
+
+function fallbackUuidFilename(id, originalFilename) {
+  return `${id}${getExtension(originalFilename)}`;
+}
+
+async function suggestCloudFilename(file, id) {
+  const fallback = settings.autoRename ? fallbackUuidFilename(id, file.name) : file.name;
+  if (!settings.autoRename || !supabase) return fallback;
+
+  const { data, error } = await supabase.functions.invoke("suggest-filename", {
+    body: {
+      originalFilename: file.name,
+      mimeType: file.type || "application/octet-stream"
+    }
+  });
+
+  const suggestion = String(data?.filename ?? "").trim();
+  const extension = getExtension(file.name);
+
+  if (error || !isValidAiFilename(suggestion, extension)) {
+    return fallback;
+  }
+
+  return suggestion;
+}
+
 function makeStoragePath(userId, id, filename) {
   return `${userId}/${id}-${cleanFilename(filename)}`;
 }
@@ -210,9 +245,12 @@ async function uploadCloudFiles(selectedFiles) {
   for (let index = 0; index < selectedFiles.length; index += 1) {
     const file = selectedFiles[index];
     const id = crypto.randomUUID();
-    const filename_ai = settings.autoRename ? cleanFilename(file.name) : file.name;
-    const storage_path = makeStoragePath(session.user.id, id, filename_ai);
     const progressBase = Math.round((index / selectedFiles.length) * 100);
+
+    setStatus("Naming", `Requesting an AI filename for ${file.name}.`, progressBase);
+
+    const filename_ai = await suggestCloudFilename(file, id);
+    const storage_path = makeStoragePath(session.user.id, id, filename_ai);
 
     setStatus("Uploading", `${file.name} to Supabase storage.`, progressBase);
 

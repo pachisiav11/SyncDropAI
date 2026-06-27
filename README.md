@@ -56,3 +56,5 @@ Do not ship production OpenAI keys inside Electron or Android builds. The intend
 The schema and RLS policy examples are in `supabase/schema.sql`. Create a private storage bucket named `files`, enable Row Level Security, and deploy the `suggest-filename` function for AI naming.
 
 Phase 3 supports email magic-link auth, metadata loading from `public.files`, uploads into Supabase Storage, metadata inserts, signed download URLs, and delete flows. Without Supabase env vars, the app stays in local mock mode for UI development.
+
+Phase 4 calls the `suggest-filename` Edge Function once per cloud upload when auto-rename is enabled. The client validates the returned lowercase hyphenated filename and falls back to a UUID filename with the original extension when the function is unavailable or returns invalid output.

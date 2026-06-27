@@ -2,6 +2,18 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 const model = Deno.env.get("OPENAI_MODEL") ?? "gpt-5.4-nano";
 const openAiKey = Deno.env.get("OPENAI_API_KEY");
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS"
+};
+
+function jsonResponse(body: Record<string, unknown>, status = 200) {
+  return Response.json(body, {
+    status,
+    headers: corsHeaders
+  });
+}
 
 function sanitizeExtension(filename: string) {
   const match = filename.match(/(\.[A-Za-z0-9]{1,12})$/);
@@ -15,12 +27,16 @@ function isValidSuggestion(value: string, extension: string) {
 }
 
 Deno.serve(async (request) => {
+  if (request.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
   if (request.method !== "POST") {
-    return new Response("Method not allowed", { status: 405 });
+    return new Response("Method not allowed", { status: 405, headers: corsHeaders });
   }
 
   if (!openAiKey) {
-    return Response.json({ error: "OPENAI_API_KEY is not configured" }, { status: 500 });
+    return jsonResponse({ error: "OPENAI_API_KEY is not configured" }, 500);
   }
 
   const { originalFilename, mimeType } = await request.json();
@@ -55,15 +71,15 @@ Deno.serve(async (request) => {
   });
 
   if (!aiResponse.ok) {
-    return Response.json({ error: "AI filename request failed" }, { status: 502 });
+    return jsonResponse({ error: "AI filename request failed" }, 502);
   }
 
   const data = await aiResponse.json();
   const suggestion = String(data.output_text ?? "").trim();
 
   if (!isValidSuggestion(suggestion, extension)) {
-    return Response.json({ error: "AI filename suggestion was invalid" }, { status: 422 });
+    return jsonResponse({ error: "AI filename suggestion was invalid" }, 422);
   }
 
-  return Response.json({ filename: suggestion });
+  return jsonResponse({ filename: suggestion });
 });
