@@ -2,7 +2,6 @@ node_modules/
 dist/
 dist-app/
 release/
-android/
 .env
 .env.local
 .DS_Store

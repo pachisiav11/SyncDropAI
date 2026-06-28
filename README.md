@@ -37,6 +37,8 @@ cd android
 .\gradlew assembleDebug
 ```
 
+The Android Gradle plugin requires Java 17 or newer and a configured Android SDK. If the command-line build cannot find them, set `JAVA_HOME` to Android Studio's bundled JBR and set `ANDROID_HOME`, or create an untracked `android/local.properties` file with `sdk.dir=C:\\Users\\<you>\\AppData\\Local\\Android\\Sdk`.
+
 ## Configuration
 
 Create `.env` from `.env.example`.
@@ -58,3 +60,9 @@ The schema and RLS policy examples are in `supabase/schema.sql`. Create a privat
 Phase 3 supports email magic-link auth, metadata loading from `public.files`, uploads into Supabase Storage, metadata inserts, signed download URLs, and delete flows. Without Supabase env vars, the app stays in local mock mode for UI development.
 
 Phase 4 calls the `suggest-filename` Edge Function once per cloud upload when auto-rename is enabled. The client validates the returned lowercase hyphenated filename and falls back to a UUID filename with the original extension when the function is unavailable or returns invalid output.
+
+Phase 5 adds the Electron preload bridge for Windows downloads. In Electron, signed Supabase download URLs are saved into the user's Downloads folder with sanitized, collision-safe filenames. Use `npm run build:electron` for the packaged renderer build and `npm run dist` to create the Windows installer with electron-builder. Installer artifacts are written to `release/`.
+
+Phase 6 adds the generated Capacitor Android project under `android/`. Build the web app first, then run `npm run cap:sync` before opening Android Studio or running Gradle. The Android manifest includes internet access for Supabase sync.
+
+Phase 7 adds production hardening in the shared client: cloud metadata is cached locally after refresh, cached metadata is shown when refresh fails, upload/download cloud calls retry transient network/server failures, selected files queue in memory while offline, and queued uploads retry when the browser reports connectivity again. Very large uploads use the same retry path and display an explicit large-file retry status; for production-scale multi-gigabyte transfers, replace Supabase's single-object browser upload with a dedicated resumable/chunked storage endpoint.

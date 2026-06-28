@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">SyncDrop AI</string>
+    <string name="title_activity_main">SyncDrop AI</string>
+    <string name="package_name">com.syncdrop.ai</string>
+    <string name="custom_url_scheme">com.syncdrop.ai</string>
+</resources>

@@ -3,8 +3,12 @@ import { isSupabaseConfigured, storageBucket, supabase } from "./supabaseClient.
 
 const STORAGE_KEYS = {
   files: "syncdrop.files",
+  cloudFiles: "syncdrop.cloudFiles",
   settings: "syncdrop.settings"
 };
+
+const LARGE_FILE_BYTES = 25 * 1024 * 1024;
+const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 const DEFAULT_SETTINGS = {
   deviceName: window.syncdrop?.platform === "windows" ? "Windows desktop" : "This device",
@@ -45,6 +49,7 @@ let activeView = "files";
 let session = null;
 let authEmail = "";
 let isBusy = false;
+let pendingCloudFiles = [];
 let transferStatus = {
   label: isSupabaseConfigured ? "Connect" : "Local mode",
   detail: isSupabaseConfigured
@@ -64,6 +69,47 @@ function loadJson(key, fallback) {
 
 function saveJson(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isOffline() {
+  return typeof navigator !== "undefined" && "onLine" in navigator && !navigator.onLine;
+}
+
+function isRetryableError(error) {
+  const status = error?.status ?? error?.cause?.status;
+  return isOffline() || RETRYABLE_STATUS_CODES.has(Number(status)) || /network|timeout|failed to fetch/i.test(error?.message ?? "");
+}
+
+async function withRetry(operation, label, attempts = 3) {
+  let lastError;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts || !isRetryableError(error)) break;
+      setStatus(label, `Temporary connection issue. Retrying ${attempt + 1} of ${attempts}.`, transferStatus.progress);
+      await sleep(700 * attempt);
+    }
+  }
+
+  throw lastError;
+}
+
+function readCachedCloudFiles() {
+  const cached = loadJson(STORAGE_KEYS.cloudFiles, []);
+  return Array.isArray(cached) ? cached : [];
+}
+
+function cacheCloudFiles(nextFiles) {
+  saveJson(STORAGE_KEYS.cloudFiles, nextFiles);
 }
 
 function escapeHtml(value) {
@@ -113,17 +159,30 @@ async function suggestCloudFilename(file, id) {
   const fallback = settings.autoRename ? fallbackUuidFilename(id, file.name) : file.name;
   if (!settings.autoRename || !supabase) return fallback;
 
-  const { data, error } = await supabase.functions.invoke("suggest-filename", {
-    body: {
-      originalFilename: file.name,
-      mimeType: file.type || "application/octet-stream"
-    }
-  });
+  let result;
+  try {
+    result = await withRetry(
+      async () => {
+        const response = await supabase.functions.invoke("suggest-filename", {
+          body: {
+            originalFilename: file.name,
+            mimeType: file.type || "application/octet-stream"
+          }
+        });
 
-  const suggestion = String(data?.filename ?? "").trim();
+        if (response.error) throw response.error;
+        return response;
+      },
+      "Naming"
+    );
+  } catch {
+    return fallback;
+  }
+
+  const suggestion = String(result.data?.filename ?? "").trim();
   const extension = getExtension(file.name);
 
-  if (error || !isValidAiFilename(suggestion, extension)) {
+  if (!isValidAiFilename(suggestion, extension)) {
     return fallback;
   }
 
@@ -202,23 +261,41 @@ async function loadCloudFiles() {
   isBusy = true;
   setStatus("Refreshing", "Loading file metadata from Supabase.", 35);
 
-  const { data, error } = await supabase
-    .from("files")
-    .select("id, filename_ai, filename_original, storage_path, mime_type, size, uploaded_from, created_at")
-    .order("created_at", { ascending: false });
+  let result;
+  try {
+    result = await withRetry(
+      async () => {
+        const response = await supabase
+          .from("files")
+          .select("id, filename_ai, filename_original, storage_path, mime_type, size, uploaded_from, created_at")
+          .order("created_at", { ascending: false });
 
-  isBusy = false;
+        if (response.error) throw response.error;
+        return response;
+      },
+      "Refreshing"
+    );
+  } catch (error) {
+    isBusy = false;
+    const cached = readCachedCloudFiles();
+    if (cached.length) {
+      files = cached.map((file) => ({ ...file, status: "synced", progress: 100 }));
+      setStatus("Offline cache", `${files.length} cached cloud file${files.length === 1 ? "" : "s"} shown.`, 100);
+      return;
+    }
 
-  if (error) {
     setStatus("Refresh failed", error.message, 0);
     return;
   }
 
-  files = data.map((file) => ({
+  isBusy = false;
+
+  files = result.data.map((file) => ({
     ...file,
     status: "synced",
     progress: 100
   }));
+  cacheCloudFiles(result.data);
   setStatus("Synced", `${files.length} cloud file${files.length === 1 ? "" : "s"} loaded.`, 100);
 }
 
@@ -227,6 +304,12 @@ async function queueFiles(fileList) {
   if (selectedFiles.length === 0) return;
 
   if (isSupabaseConfigured && session) {
+    if (isOffline()) {
+      pendingCloudFiles = [...pendingCloudFiles, ...selectedFiles];
+      setStatus("Queued offline", `${selectedFiles.length} file${selectedFiles.length === 1 ? "" : "s"} will upload when the network returns.`, 0);
+      return;
+    }
+
     await uploadCloudFiles(selectedFiles);
     return;
   }
@@ -247,17 +330,41 @@ async function uploadCloudFiles(selectedFiles) {
     const id = crypto.randomUUID();
     const progressBase = Math.round((index / selectedFiles.length) * 100);
 
-    setStatus("Naming", `Requesting an AI filename for ${file.name}.`, progressBase);
+    if (isOffline()) {
+      pendingCloudFiles = [...selectedFiles.slice(index), ...pendingCloudFiles];
+      isBusy = false;
+      setStatus("Queued offline", `${selectedFiles.length - index} file${selectedFiles.length - index === 1 ? "" : "s"} will upload when the network returns.`, progressBase);
+      return;
+    }
+
+    const largeFileNote = file.size >= LARGE_FILE_BYTES ? " Large file retry protection is active." : "";
+    setStatus("Naming", `Requesting an AI filename for ${file.name}.${largeFileNote}`, progressBase);
 
     const filename_ai = await suggestCloudFilename(file, id);
     const storage_path = makeStoragePath(session.user.id, id, filename_ai);
 
     setStatus("Uploading", `${file.name} to Supabase storage.`, progressBase);
 
-    const upload = await supabase.storage.from(storageBucket).upload(storage_path, file, {
-      contentType: file.type || "application/octet-stream",
-      upsert: false
-    });
+    let upload;
+    try {
+      upload = await withRetry(
+        async () => {
+          const response = await supabase.storage.from(storageBucket).upload(storage_path, file, {
+            contentType: file.type || "application/octet-stream",
+            upsert: false
+          });
+
+          if (response.error) throw response.error;
+          return response;
+        },
+        "Uploading"
+      );
+    } catch (error) {
+      isBusy = false;
+      pendingCloudFiles = [file, ...selectedFiles.slice(index + 1), ...pendingCloudFiles];
+      setStatus("Upload queued", `${error.message}. The upload will retry when the network returns.`, progressBase);
+      return;
+    }
 
     if (upload.error) {
       isBusy = false;
@@ -265,16 +372,32 @@ async function uploadCloudFiles(selectedFiles) {
       return;
     }
 
-    const insert = await supabase.from("files").insert({
-      id,
-      user_id: session.user.id,
-      filename_ai,
-      filename_original: file.name,
-      storage_path,
-      mime_type: file.type || "application/octet-stream",
-      size: file.size,
-      uploaded_from: window.syncdrop?.platform ?? "web"
-    });
+    let insert;
+    try {
+      insert = await withRetry(
+        async () => {
+          const response = await supabase.from("files").insert({
+            id,
+            user_id: session.user.id,
+            filename_ai,
+            filename_original: file.name,
+            storage_path,
+            mime_type: file.type || "application/octet-stream",
+            size: file.size,
+            uploaded_from: window.syncdrop?.platform ?? "web"
+          });
+
+          if (response.error) throw response.error;
+          return response;
+        },
+        "Saving metadata"
+      );
+    } catch (error) {
+      await supabase.storage.from(storageBucket).remove([storage_path]);
+      isBusy = false;
+      setStatus("Metadata failed", error.message, progressBase);
+      return;
+    }
 
     if (insert.error) {
       await supabase.storage.from(storageBucket).remove([storage_path]);
@@ -286,6 +409,14 @@ async function uploadCloudFiles(selectedFiles) {
 
   isBusy = false;
   await loadCloudFiles();
+}
+
+async function retryPendingCloudFiles() {
+  if (!session || isBusy || pendingCloudFiles.length === 0 || isOffline()) return;
+  const queued = pendingCloudFiles;
+  pendingCloudFiles = [];
+  setStatus("Retrying uploads", `${queued.length} queued file${queued.length === 1 ? "" : "s"} ready to upload.`, transferStatus.progress);
+  await uploadCloudFiles(queued);
 }
 
 function simulateTransfers(ids) {
@@ -369,9 +500,33 @@ async function downloadFile(id) {
   if (!file) return;
 
   if (isSupabaseConfigured && session && file.storage_path) {
-    const { data, error } = await supabase.storage.from(storageBucket).createSignedUrl(file.storage_path, 60);
-    if (error) {
+    let data;
+    try {
+      const response = await withRetry(
+        async () => {
+          const signedUrl = await supabase.storage.from(storageBucket).createSignedUrl(file.storage_path, 60);
+          if (signedUrl.error) throw signedUrl.error;
+          return signedUrl;
+        },
+        "Preparing download"
+      );
+      data = response.data;
+    } catch (error) {
       setStatus("Download failed", error.message, 0);
+      return;
+    }
+
+    if (window.syncdrop?.saveUrl) {
+      setStatus("Downloading", `Saving ${file.filename_ai} to Downloads.`, 35);
+      try {
+        const saved = await window.syncdrop.saveUrl({
+          url: data.signedUrl,
+          filename: file.filename_ai
+        });
+        setStatus("Downloaded", `${saved.filename} saved to Downloads.`, 100);
+      } catch (error) {
+        setStatus("Download failed", error.message ?? "Could not save the file.", 0);
+      }
       return;
     }
 
@@ -412,6 +567,7 @@ function renderAuthPanel() {
         </div>
         <div class="auth-actions">
           <button type="button" data-action="refresh" ${isBusy ? "disabled" : ""}>Refresh</button>
+          ${window.syncdrop?.openDownloads ? '<button type="button" data-action="open-downloads">Downloads</button>' : ""}
           <button type="button" data-action="sign-out" ${isBusy ? "disabled" : ""}>Sign out</button>
         </div>
       </section>
@@ -587,6 +743,9 @@ function attachEvents() {
 
   document.querySelector("[data-action='refresh']")?.addEventListener("click", loadCloudFiles);
   document.querySelector("[data-action='sign-out']")?.addEventListener("click", signOut);
+  document.querySelector("[data-action='open-downloads']")?.addEventListener("click", () => {
+    window.syncdrop?.openDownloads();
+  });
 
   settingsForm?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -602,3 +761,8 @@ function attachEvents() {
 
 render();
 initSupabase();
+
+window.addEventListener("online", retryPendingCloudFiles);
+window.addEventListener("offline", () => {
+  setStatus("Offline", "Transfers will retry when the network returns.", transferStatus.progress);
+});

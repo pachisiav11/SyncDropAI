@@ -40,7 +40,7 @@
     "appId": "com.syncdrop.ai",
     "productName": "SyncDrop AI",
     "directories": {
-      "output": "dist"
+      "output": "release"
     },
     "files": [
       "dist-app/**/*",
