@@ -504,7 +504,9 @@ async function downloadFile(id) {
     try {
       const response = await withRetry(
         async () => {
-          const signedUrl = await supabase.storage.from(storageBucket).createSignedUrl(file.storage_path, 60);
+          const signedUrl = await supabase.storage
+            .from(storageBucket)
+            .createSignedUrl(file.storage_path, 60, { download: file.filename_ai });
           if (signedUrl.error) throw signedUrl.error;
           return signedUrl;
         },
@@ -530,8 +532,14 @@ async function downloadFile(id) {
       return;
     }
 
-    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
-    setStatus("Download ready", "Signed URL opened in a new tab.", 100);
+    const link = document.createElement("a");
+    link.href = data.signedUrl;
+    link.download = file.filename_ai;
+    link.rel = "noopener noreferrer";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setStatus("Download ready", `${file.filename_ai} download started.`, 100);
     return;
   }
 
