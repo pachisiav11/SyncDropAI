@@ -1,6 +1,7 @@
 /.gradle/
 /build/
 /app/build/
+/capacitor-cordova-android-plugins/build/
 /captures/
 /local.properties
 *.iml
