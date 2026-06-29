@@ -12,6 +12,8 @@ create table if not exists public.files (
 
 alter table public.files enable row level security;
 
+grant select, insert, delete on public.files to authenticated;
+
 create policy "users can read their own files"
   on public.files for select
   using (auth.uid() = user_id);
