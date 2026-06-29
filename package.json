@@ -25,6 +25,7 @@
   "license": "MIT",
   "dependencies": {
     "@capacitor/android": "^7.4.3",
+    "@capacitor/app": "^7.1.2",
     "@capacitor/core": "^7.4.3",
     "@supabase/supabase-js": "^2.50.2"
   },

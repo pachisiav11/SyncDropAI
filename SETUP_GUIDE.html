@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SyncDrop AI — Supabase &amp; Android Setup Guide</title>
+<style>
+  :root {
+    color-scheme: light;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #eef2f6;
+    color: #17202a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: linear-gradient(180deg, #f8fafc 0, #eef2f6 420px), #eef2f6;
+    padding: 32px 16px 80px;
+  }
+  .wrap {
+    max-width: 820px;
+    margin: 0 auto;
+  }
+  header.hero {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 12px;
+    padding: 32px;
+    margin-bottom: 24px;
+  }
+  header.hero h1 { margin: 0 0 8px; font-size: 1.7rem; }
+  header.hero p { margin: 0; color: #475569; }
+  nav.toc {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 12px;
+    padding: 24px 32px;
+    margin-bottom: 24px;
+  }
+  nav.toc h2 { font-size: 1rem; margin: 0 0 12px; color: #334155; text-transform: uppercase; letter-spacing: 0.04em; }
+  nav.toc ol { margin: 0; padding-left: 1.2rem; }
+  nav.toc li { margin-bottom: 6px; }
+  nav.toc a { color: #1f2937; text-decoration: none; }
+  nav.toc a:hover { text-decoration: underline; }
+  section.step {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 12px;
+    padding: 32px;
+    margin-bottom: 20px;
+  }
+  section.step h2 {
+    margin: 0 0 6px;
+    font-size: 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #1f2937;
+    color: #fff;
+    font-size: 0.85rem;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+  section.step .sub { color: #64748b; margin: 0 0 18px; font-size: 0.9rem; }
+  section.step ol, section.step ul { padding-left: 1.3rem; }
+  section.step li { margin-bottom: 10px; line-height: 1.5; }
+  code, pre code {
+    background: #f1f5f9;
+    border-radius: 4px;
+    padding: 0.1rem 0.4rem;
+    font-size: 0.88em;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+  pre {
+    background: #0f172a;
+    color: #e2e8f0;
+    border-radius: 8px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    font-size: 0.85rem;
+    line-height: 1.5;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+  .callout {
+    border-left: 4px solid #1f2937;
+    background: #f8fafc;
+    padding: 12px 16px;
+    border-radius: 0 6px 6px 0;
+    margin: 14px 0;
+    font-size: 0.9rem;
+  }
+  .callout.warn { border-left-color: #b45309; background: #fffbeb; }
+  .callout.danger { border-left-color: #b91c1c; background: #fef2f2; }
+  .callout strong { display: block; margin-bottom: 4px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 0.88rem;
+  }
+  th, td {
+    border: 1px solid #e2e8f0;
+    padding: 8px 10px;
+    text-align: left;
+  }
+  th { background: #f8fafc; }
+  footer {
+    text-align: center;
+    color: #94a3b8;
+    font-size: 0.85rem;
+    margin-top: 32px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <h1>SyncDrop AI — Setup Guide</h1>
+    <p>Everything required to configure Supabase, build the Android APK, sideload it, and sign in successfully. Follow the steps in order the first time; after that, only the build steps (5–6) are needed when code changes.</p>
+  </header>
+
+  <nav class="toc">
+    <h2>Contents</h2>
+    <ol>
+      <li><a href="#supabase-project">Create the Supabase project</a></li>
+      <li><a href="#credentials">Get your API credentials</a></li>
+      <li><a href="#storage-schema">Set up storage bucket &amp; database schema</a></li>
+      <li><a href="#redirect-urls">Configure auth redirect URLs (required)</a></li>
+      <li><a href="#env">Create your <code>.env</code> file</a></li>
+      <li><a href="#build">Build the web app and Android APK</a></li>
+      <li><a href="#install">Install the APK on your phone</a></li>
+      <li><a href="#sign-in">Signing in</a></li>
+      <li><a href="#otp-optional">Optional: enable typed OTP codes (needs SMTP)</a></li>
+      <li><a href="#troubleshooting">Troubleshooting</a></li>
+    </ol>
+  </nav>
+
+  <section class="step" id="supabase-project">
+    <h2><span class="badge">1</span> Create the Supabase project</h2>
+    <p class="sub">Skip this if you already have a project — note its name for the next steps.</p>
+    <ol>
+      <li>Go to <code>supabase.com</code> and sign in.</li>
+      <li>Click <strong>New project</strong>, choose an organization, name it (e.g. <code>syncdrop-ai</code>), set a database password, and pick a region close to you.</li>
+      <li>Wait for provisioning to finish (a minute or two).</li>
+    </ol>
+  </section>
+
+  <section class="step" id="credentials">
+    <h2><span class="badge">2</span> Get your API credentials</h2>
+    <p class="sub">These go straight into <code>.env</code> in step 5.</p>
+    <ol>
+      <li>In the project dashboard, open <strong>Project Settings → API</strong>.</li>
+      <li>Copy the <strong>Project URL</strong> (looks like <code>https://&lt;ref&gt;.supabase.co</code>) — this is <code>VITE_SUPABASE_URL</code>.</li>
+      <li>Copy the <strong>anon / public</strong> key (NOT the service_role key) — this is <code>VITE_SUPABASE_ANON_KEY</code>.</li>
+    </ol>
+    <div class="callout danger">
+      <strong>Never use the service_role key in the app.</strong>
+      It bypasses Row Level Security entirely. Only the anon/public key belongs in a client app.
+    </div>
+  </section>
+
+  <section class="step" id="storage-schema">
+    <h2><span class="badge">3</span> Set up storage bucket &amp; database schema</h2>
+    <ol>
+      <li>Go to <strong>Storage</strong> in the dashboard and create a new <strong>private</strong> bucket named exactly <code>files</code> (matches <code>VITE_SUPABASE_BUCKET</code>).</li>
+      <li>Go to <strong>SQL Editor</strong>, open the project's <code>supabase/schema.sql</code> file in your repo, and run its contents to create the <code>public.files</code> table and Row Level Security policies.</li>
+      <li>Optional: deploy the <code>supabase/functions/suggest-filename</code> Edge Function if you want AI-generated filenames (requires an OpenAI key set as a function secret).</li>
+    </ol>
+  </section>
+
+  <section class="step" id="redirect-urls">
+    <h2><span class="badge">4</span> Configure auth redirect URLs <em>(required for mobile sign-in)</em></h2>
+    <p class="sub">Without this step, tapping the magic-link in your email will fail on the phone — Supabase only redirects to URLs it has explicitly allow-listed.</p>
+    <ol>
+      <li>Go to <strong>Authentication → URL Configuration</strong>.</li>
+      <li>Under <strong>Redirect URLs</strong>, add:
+        <pre><code>com.syncdrop.ai://login-callback</code></pre>
+      </li>
+      <li>Save.</li>
+    </ol>
+    <div class="callout">
+      <strong>Why this is needed</strong>
+      The Android app registers a custom URL scheme (<code>com.syncdrop.ai://login-callback</code>) so that tapping the sign-in link in Gmail/your email app opens SyncDrop AI directly and completes sign-in — instead of trying (and failing) to open <code>http://localhost:3000</code> in a browser.
+    </div>
+  </section>
+
+  <section class="step" id="env">
+    <h2><span class="badge">5</span> Create your <code>.env</code> file</h2>
+    <p class="sub">Create a file named <code>.env</code> in the project root (same folder as <code>package.json</code>). It is gitignored — never commit it.</p>
+    <pre><code>VITE_SUPABASE_URL=https://&lt;your-project-ref&gt;.supabase.co
+VITE_SUPABASE_ANON_KEY=&lt;your-anon-public-key&gt;
+VITE_SUPABASE_BUCKET=files
+SUPABASE_FUNCTIONS_URL=https://&lt;your-project-ref&gt;.supabase.co/functions/v1
+OPENAI_MODEL=gpt-5.4-nano</code></pre>
+    <table>
+      <tr><th>Variable</th><th>Required</th><th>Used for</th></tr>
+      <tr><td><code>VITE_SUPABASE_URL</code></td><td>Yes</td><td>Connecting the app to your Supabase project</td></tr>
+      <tr><td><code>VITE_SUPABASE_ANON_KEY</code></td><td>Yes</td><td>Public client auth/storage access</td></tr>
+      <tr><td><code>VITE_SUPABASE_BUCKET</code></td><td>No (defaults to <code>files</code>)</td><td>Storage bucket name</td></tr>
+      <tr><td><code>SUPABASE_FUNCTIONS_URL</code></td><td>No</td><td>AI filename suggestion Edge Function</td></tr>
+      <tr><td><code>OPENAI_MODEL</code></td><td>No</td><td>Model used by the Edge Function</td></tr>
+    </table>
+    <div class="callout warn">
+      <strong>Vite inlines these at build time, not runtime.</strong>
+      Any time you change <code>.env</code>, you must rebuild (step 6) — restarting the app alone does nothing.
+    </div>
+  </section>
+
+  <section class="step" id="build">
+    <h2><span class="badge">6</span> Build the web app and Android APK</h2>
+    <p class="sub">Run from the project root. Requires Node.js, the Android SDK, and a <strong>Java 21</strong> JDK (Capacitor's Android module needs it specifically — Java 11/17 will fail the Gradle build).</p>
+    <pre><code># 1. Install dependencies (first time only)
+npm install
+
+# 2. Build the web bundle — bakes in your .env values
+npm run build
+
+# 3. Copy the build into the native Android project
+npx cap sync android
+
+# 4. Build the debug APK
+cd android
+./gradlew.bat assembleDebug   # Windows
+# or ./gradlew assembleDebug  # macOS/Linux</code></pre>
+    <div class="callout warn">
+      <strong>Java version</strong>
+      If Gradle fails with <code>invalid source release: 21</code> or <code>requires Java 17</code>, point <code>JAVA_HOME</code> at a JDK 21 install before running Gradle, e.g.:
+      <pre><code>export JAVA_HOME="/c/Program Files/Microsoft/jdk-21.0.11.10-hotspot"
+export PATH="$JAVA_HOME/bin:$PATH"</code></pre>
+    </div>
+    <p>The finished APK is written to:</p>
+    <pre><code>android/app/build/outputs/apk/debug/app-debug.apk</code></pre>
+    <p>Copy it into <code>builds/</code> for safekeeping if you want a stable path to sideload from.</p>
+  </section>
+
+  <section class="step" id="install">
+    <h2><span class="badge">7</span> Install the APK on your phone</h2>
+    <ol>
+      <li>If SyncDrop AI is already installed from a previous build, <strong>uninstall it first</strong> — debug-signed APKs from different build runs can have signature mismatches that block updates.</li>
+      <li>Transfer <code>app-debug.apk</code> to your phone via one of:
+        <ul>
+          <li><strong>ADB</strong> (phone connected via USB with USB debugging enabled): <code>adb install -r app-debug.apk</code></li>
+          <li>Cloud drive / email-to-self / USB drag-and-drop, then open it from a file manager app</li>
+        </ul>
+      </li>
+      <li>When prompted, allow "install unknown apps" for whichever app you used to open the file.</li>
+    </ol>
+  </section>
+
+  <section class="step" id="sign-in">
+    <h2><span class="badge">8</span> Signing in</h2>
+    <ol>
+      <li>Open SyncDrop AI on your phone.</li>
+      <li>Enter your email address and tap <strong>Send link</strong>.</li>
+      <li>Open the email on the <strong>same phone</strong> and tap the sign-in link.</li>
+      <li>Android should offer to open it with SyncDrop AI (or open it automatically) — this signs you in and returns you to the app.</li>
+    </ol>
+    <div class="callout">
+      <strong>Why you can't just click the link in a browser</strong>
+      The link redirects to a Supabase auth callback URL. We've configured that callback to be a custom app scheme (<code>com.syncdrop.ai://login-callback</code>) rather than a website, so tapping it hands control straight to the installed app instead of a browser.
+    </div>
+  </section>
+
+  <section class="step" id="otp-optional">
+    <h2><span class="badge">9</span> Optional: enable typed OTP codes</h2>
+    <p class="sub">The app also has a fallback "enter the code from your email" field, for cases where tapping a link is inconvenient. This requires extra Supabase setup and is <strong>not required</strong> — the deep-link flow in step 8 works without it.</p>
+    <ol>
+      <li>Supabase only lets you edit email template content (to insert the raw <code>{{ .Token }}</code> code) once a <strong>custom SMTP</strong> provider is connected. Free options include Resend and Brevo.</li>
+      <li>Set it up under <strong>Project Settings → Authentication → SMTP Settings</strong>.</li>
+      <li>Then go to <strong>Authentication → Email Templates → Magic Link</strong> and add <code>{{ .Token }}</code> somewhere in the body, e.g.:
+        <pre><code>Or enter this code in the app: &lt;strong&gt;{{ .Token }}&lt;/strong&gt;</code></pre>
+      </li>
+      <li>Save. Future sign-in emails will include a 6-digit code you can type directly into the app.</li>
+    </ol>
+  </section>
+
+  <section class="step" id="troubleshooting">
+    <h2><span class="badge">10</span> Troubleshooting</h2>
+    <table>
+      <tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr>
+      <tr>
+        <td>"Supabase not configured" banner</td>
+        <td><code>.env</code> missing/empty, or app built before <code>.env</code> was filled in</td>
+        <td>Fill in <code>.env</code> (step 5), then rebuild (step 6) — Vite inlines values at build time</td>
+      </tr>
+      <tr>
+        <td>Link opens browser, says site unreachable / <code>localhost</code> error</td>
+        <td>Redirect URL not allow-listed, or installed APK predates the deep-link fix</td>
+        <td>Complete step 4, then rebuild and reinstall the APK</td>
+      </tr>
+      <tr>
+        <td>"email rate limit exceeded"</td>
+        <td>Supabase's default email service caps sign-in emails per hour</td>
+        <td>Wait ~1 hour, or set up custom SMTP for higher limits</td>
+      </tr>
+      <tr>
+        <td>APK won't install / update over old version</td>
+        <td>Debug signing mismatch between build runs</td>
+        <td>Uninstall the old app first, then install the new APK</td>
+      </tr>
+      <tr>
+        <td>Gradle build fails: "Android Gradle plugin requires Java 17" or "invalid source release: 21"</td>
+        <td>Wrong <code>JAVA_HOME</code></td>
+        <td>Point <code>JAVA_HOME</code> at a JDK 21 install before running Gradle (step 6)</td>
+      </tr>
+    </table>
+  </section>
+
+  <footer>SyncDrop AI · github.com/pachisiav11/SyncDropAI</footer>
+</div>
+</body>
+</html>

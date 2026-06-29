@@ -1,5 +1,9 @@
 import "./styles.css";
+import { Capacitor } from "@capacitor/core";
+import { App } from "@capacitor/app";
 import { isSupabaseConfigured, storageBucket, supabase } from "./supabaseClient.js";
+
+const LOGIN_CALLBACK_URL = "com.syncdrop.ai://login-callback";
 
 const STORAGE_KEYS = {
   files: "syncdrop.files",
@@ -48,6 +52,7 @@ let settings = loadJson(STORAGE_KEYS.settings, DEFAULT_SETTINGS);
 let activeView = "files";
 let session = null;
 let authEmail = "";
+let otpRequested = false;
 let isBusy = false;
 let pendingCloudFiles = [];
 let transferStatus = {
@@ -231,28 +236,63 @@ async function initSupabase() {
   if (session) {
     await loadCloudFiles();
   }
+
+  if (Capacitor.isNativePlatform()) {
+    App.addListener("appUrlOpen", ({ url }) => handleAuthCallback(url));
+  }
+}
+
+async function handleAuthCallback(url) {
+  const hash = url.includes("#") ? url.slice(url.indexOf("#") + 1) : "";
+  const params = new URLSearchParams(hash);
+  const accessToken = params.get("access_token");
+  const refreshToken = params.get("refresh_token");
+  if (!accessToken || !refreshToken) return;
+
+  isBusy = true;
+  setStatus("Signing in", "Completing sign-in from email link.", 60);
+
+  const { error } = await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+
+  isBusy = false;
+  otpRequested = false;
+  setStatus(error ? "Sign-in failed" : "Signed in", error?.message ?? "Cloud sync is ready.", error ? 0 : 100);
 }
 
 async function signInWithEmail(email) {
   if (!supabase || !email) return;
   isBusy = true;
-  setStatus("Sending link", "Check your email for the Supabase magic link.", 20);
+  setStatus("Sending link", "Check your email for the sign-in link or code.", 20);
 
-  const { error } = await supabase.auth.signInWithOtp({
-    email,
-    options: {
-      emailRedirectTo: window.location.href
-    }
-  });
+  const redirectTo = Capacitor.isNativePlatform() ? LOGIN_CALLBACK_URL : window.location.href;
+  const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: redirectTo } });
+
+  otpRequested = !error;
+  isBusy = false;
+  setStatus(error ? "Sign-in failed" : "Link sent", error?.message ?? "Tap the link in your email, or enter a code below if your project sends one.", error ? 0 : 100);
+}
+
+async function verifyOtpCode(email, token) {
+  if (!supabase || !email || !token) return;
+  isBusy = true;
+  setStatus("Verifying code", "Checking your sign-in code.", 60);
+
+  const { error } = await supabase.auth.verifyOtp({ email, token, type: "email" });
 
   isBusy = false;
-  setStatus(error ? "Sign-in failed" : "Link sent", error?.message ?? "Open the link on this device to finish sign-in.", error ? 0 : 100);
+  if (error) {
+    setStatus("Verification failed", error.message, 0);
+  } else {
+    otpRequested = false;
+    setStatus("Signed in", "Cloud sync is ready.", 100);
+  }
 }
 
 async function signOut() {
   if (!supabase) return;
   await supabase.auth.signOut();
   session = null;
+  otpRequested = false;
   setStatus("Signed out", "Local sample files are shown until you sign in again.", 0);
 }
 
@@ -582,15 +622,31 @@ function renderAuthPanel() {
     `;
   }
 
+  if (otpRequested) {
+    return `
+      <section class="auth-panel" aria-label="Connection status">
+        <div>
+          <strong>Enter your code</strong>
+          <span>Sent to ${escapeHtml(authEmail)}.</span>
+        </div>
+        <form id="otp-form" class="auth-form">
+          <input name="token" type="text" inputmode="numeric" placeholder="123456" required />
+          <button type="submit" ${isBusy ? "disabled" : ""}>Verify</button>
+        </form>
+        <button type="button" data-action="otp-back" ${isBusy ? "disabled" : ""}>Use a different email</button>
+      </section>
+    `;
+  }
+
   return `
     <section class="auth-panel" aria-label="Connection status">
       <div>
         <strong>Cloud sync</strong>
-        <span>Sign in with a Supabase magic link.</span>
+        <span>Sign in with an email code.</span>
       </div>
       <form id="auth-form" class="auth-form">
         <input name="email" type="email" placeholder="you@example.com" value="${escapeHtml(authEmail)}" required />
-        <button type="submit" ${isBusy ? "disabled" : ""}>Send link</button>
+        <button type="submit" ${isBusy ? "disabled" : ""}>Send code</button>
       </form>
     </section>
   `;
@@ -709,6 +765,7 @@ function attachEvents() {
   const dropZone = document.querySelector(".drop-zone");
   const settingsForm = document.querySelector("#settings-form");
   const authForm = document.querySelector("#auth-form");
+  const otpForm = document.querySelector("#otp-form");
 
   fileInput.addEventListener("change", (event) => {
     queueFiles(event.target.files);
@@ -764,6 +821,16 @@ function attachEvents() {
     event.preventDefault();
     authEmail = authForm.email.value.trim();
     signInWithEmail(authEmail);
+  });
+
+  otpForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    verifyOtpCode(authEmail, otpForm.token.value.trim());
+  });
+
+  document.querySelector("[data-action='otp-back']")?.addEventListener("click", () => {
+    otpRequested = false;
+    render();
   });
 }
 
