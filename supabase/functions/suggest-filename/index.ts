@@ -26,6 +26,20 @@ function isValidSuggestion(value: string, extension: string) {
   return /^[a-z0-9]+(?:-[a-z0-9]+)*(\.[A-Za-z0-9]{1,12})?$/.test(value);
 }
 
+function extractOutputText(data: any): string {
+  if (typeof data?.output_text === "string") return data.output_text;
+  const output = Array.isArray(data?.output) ? data.output : [];
+  for (const item of output) {
+    if (item?.type !== "message" || !Array.isArray(item.content)) continue;
+    for (const part of item.content) {
+      if (part?.type === "output_text" && typeof part.text === "string") {
+        return part.text;
+      }
+    }
+  }
+  return "";
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -75,7 +89,7 @@ Deno.serve(async (request) => {
   }
 
   const data = await aiResponse.json();
-  const suggestion = String(data.output_text ?? "").trim();
+  const suggestion = String(extractOutputText(data)).trim();
 
   if (!isValidSuggestion(suggestion, extension)) {
     return jsonResponse({ error: "AI filename suggestion was invalid" }, 422);
