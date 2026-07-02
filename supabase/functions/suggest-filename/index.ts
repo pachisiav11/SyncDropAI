@@ -1,7 +1,8 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import Anthropic from "npm:@anthropic-ai/sdk";
 
-const model = Deno.env.get("OPENAI_MODEL") ?? "gpt-5.4-nano";
-const openAiKey = Deno.env.get("OPENAI_API_KEY");
+const model = Deno.env.get("ANTHROPIC_MODEL") ?? "claude-opus-4-8";
+const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY");
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -26,20 +27,6 @@ function isValidSuggestion(value: string, extension: string) {
   return /^[a-z0-9]+(?:-[a-z0-9]+)*(\.[A-Za-z0-9]{1,12})?$/.test(value);
 }
 
-function extractOutputText(data: any): string {
-  if (typeof data?.output_text === "string") return data.output_text;
-  const output = Array.isArray(data?.output) ? data.output : [];
-  for (const item of output) {
-    if (item?.type !== "message" || !Array.isArray(item.content)) continue;
-    for (const part of item.content) {
-      if (part?.type === "output_text" && typeof part.text === "string") {
-        return part.text;
-      }
-    }
-  }
-  return "";
-}
-
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -49,8 +36,8 @@ Deno.serve(async (request) => {
     return new Response("Method not allowed", { status: 405, headers: corsHeaders });
   }
 
-  if (!openAiKey) {
-    return jsonResponse({ error: "OPENAI_API_KEY is not configured" }, 500);
+  if (!anthropicKey) {
+    return jsonResponse({ error: "ANTHROPIC_API_KEY is not configured" }, 500);
   }
 
   const { originalFilename, mimeType } = await request.json();
@@ -71,25 +58,23 @@ Deno.serve(async (request) => {
     `MIME type: ${mimeType ?? "unknown"}`
   ].join("\n");
 
-  const aiResponse = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${openAiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model,
-      input: prompt,
-      max_output_tokens: 40
-    })
-  });
+  const client = new Anthropic({ apiKey: anthropicKey });
 
-  if (!aiResponse.ok) {
+  let suggestion = "";
+  try {
+    const message = await client.messages.create({
+      model,
+      max_tokens: 64,
+      messages: [{ role: "user", content: prompt }]
+    });
+    suggestion = message.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("")
+      .trim();
+  } catch {
     return jsonResponse({ error: "AI filename request failed" }, 502);
   }
-
-  const data = await aiResponse.json();
-  const suggestion = String(extractOutputText(data)).trim();
 
   if (!isValidSuggestion(suggestion, extension)) {
     return jsonResponse({ error: "AI filename suggestion was invalid" }, 422);

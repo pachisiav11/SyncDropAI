@@ -173,7 +173,7 @@
     <ol>
       <li>Go to <strong>Storage</strong> in the dashboard and create a new <strong>private</strong> bucket named exactly <code>files</code> (matches <code>VITE_SUPABASE_BUCKET</code>).</li>
       <li>Go to <strong>SQL Editor</strong>, open the project's <code>supabase/schema.sql</code> file in your repo, and run its contents to create the <code>public.files</code> table and Row Level Security policies.</li>
-      <li>Optional: deploy the <code>supabase/functions/suggest-filename</code> Edge Function if you want AI-generated filenames (requires an OpenAI key set as a function secret).</li>
+      <li>Optional: deploy the <code>supabase/functions/suggest-filename</code> Edge Function if you want AI-generated filenames (requires an Anthropic API key set as a function secret).</li>
     </ol>
   </section>
 
@@ -200,14 +200,14 @@
 VITE_SUPABASE_ANON_KEY=&lt;your-anon-public-key&gt;
 VITE_SUPABASE_BUCKET=files
 SUPABASE_FUNCTIONS_URL=https://&lt;your-project-ref&gt;.supabase.co/functions/v1
-OPENAI_MODEL=gpt-5.4-nano</code></pre>
+ANTHROPIC_MODEL=claude-opus-4-8</code></pre>
     <table>
       <tr><th>Variable</th><th>Required</th><th>Used for</th></tr>
       <tr><td><code>VITE_SUPABASE_URL</code></td><td>Yes</td><td>Connecting the app to your Supabase project</td></tr>
       <tr><td><code>VITE_SUPABASE_ANON_KEY</code></td><td>Yes</td><td>Public client auth/storage access</td></tr>
       <tr><td><code>VITE_SUPABASE_BUCKET</code></td><td>No (defaults to <code>files</code>)</td><td>Storage bucket name</td></tr>
       <tr><td><code>SUPABASE_FUNCTIONS_URL</code></td><td>No</td><td>AI filename suggestion Edge Function</td></tr>
-      <tr><td><code>OPENAI_MODEL</code></td><td>No</td><td>Model used by the Edge Function</td></tr>
+      <tr><td><code>ANTHROPIC_MODEL</code></td><td>No</td><td>Model used by the Edge Function</td></tr>
     </table>
     <div class="callout warn">
       <strong>Vite inlines these at build time, not runtime.</strong>

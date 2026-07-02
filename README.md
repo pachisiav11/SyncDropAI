@@ -51,7 +51,7 @@ VITE_SUPABASE_ANON_KEY=
 VITE_SUPABASE_BUCKET=files
 ```
 
-Do not ship production OpenAI keys inside Electron or Android builds. The intended production path is to keep the OpenAI API key in a Supabase Edge Function secret and call that function from the client.
+Do not ship production Anthropic keys inside Electron or Android builds. The intended production path is to keep the Anthropic API key in a Supabase Edge Function secret and call that function from the client.
 
 ## Supabase
 
