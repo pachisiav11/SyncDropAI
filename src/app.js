@@ -240,6 +240,23 @@ async function initSupabase() {
   if (Capacitor.isNativePlatform()) {
     App.addListener("appUrlOpen", ({ url }) => handleAuthCallback(url));
   }
+
+  // Electron: the main process captures the email magic-link tokens via a loopback
+  // server and forwards them here to complete sign-in.
+  if (window.syncdrop?.onAuthTokens) {
+    window.syncdrop.onAuthTokens(async ({ access_token, refresh_token }) => {
+      if (!access_token || !refresh_token) return;
+
+      isBusy = true;
+      setStatus("Signing in", "Completing sign-in from email link.", 60);
+
+      const { error } = await supabase.auth.setSession({ access_token, refresh_token });
+
+      isBusy = false;
+      otpRequested = false;
+      setStatus(error ? "Sign-in failed" : "Signed in", error?.message ?? "Cloud sync is ready.", error ? 0 : 100);
+    });
+  }
 }
 
 async function handleAuthCallback(url) {
@@ -264,7 +281,9 @@ async function signInWithEmail(email) {
   isBusy = true;
   setStatus("Sending link", "Check your email for the sign-in link or code.", 20);
 
-  const redirectTo = Capacitor.isNativePlatform() ? LOGIN_CALLBACK_URL : window.location.href;
+  const redirectTo = Capacitor.isNativePlatform()
+    ? LOGIN_CALLBACK_URL
+    : window.syncdrop?.authRedirectUrl ?? window.location.href;
   const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: redirectTo } });
 
   otpRequested = !error;
@@ -559,13 +578,17 @@ async function downloadFile(id) {
     }
 
     if (window.syncdrop?.saveUrl) {
-      setStatus("Downloading", `Saving ${file.filename_ai} to Downloads.`, 35);
+      setStatus("Choose a location", `Pick where to save ${file.filename_ai}.`, 20);
       try {
         const saved = await window.syncdrop.saveUrl({
           url: data.signedUrl,
           filename: file.filename_ai
         });
-        setStatus("Downloaded", `${saved.filename} saved to Downloads.`, 100);
+        if (saved?.canceled) {
+          setStatus("Download cancelled", "No location was chosen.", 0);
+        } else {
+          setStatus("Downloaded", `${saved.filename} saved to ${saved.path}.`, 100);
+        }
       } catch (error) {
         setStatus("Download failed", error.message ?? "Could not save the file.", 0);
       }
