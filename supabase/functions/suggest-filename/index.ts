@@ -1,7 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import Anthropic from "npm:@anthropic-ai/sdk";
 
-const model = Deno.env.get("ANTHROPIC_MODEL") ?? "claude-opus-4-8";
+const model = Deno.env.get("ANTHROPIC_MODEL") ?? "claude-haiku-4-5";
 const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY");
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
