@@ -33,6 +33,19 @@ program
     "after",
     [
       "",
+      "Options by command:",
+      "  upload    --no-rename         keep the original filename (skip AI rename)",
+      "  list      [count]             max number of files to show",
+      "            --since <window>    only newer than e.g. 30m, 5h, 28d, 2w",
+      "            --limit <n>         max number of files to show",
+      "            --search <query>    filter by filename substring",
+      "            --json              print raw JSON instead of a table",
+      "  download  --out <path>        destination file or directory",
+      "  delete    -y, --yes           skip the confirmation prompt",
+      "  info      --json              print raw JSON",
+      "",
+      "Run `syncdrop <command> --help` for a single command's options.",
+      "",
       "Examples:",
       "  syncdrop upload ./report.pdf",
       "  syncdrop upload ./raw.png --no-rename",
@@ -89,19 +102,17 @@ program
     }
 
     const rows = files.map((f) => ({
+      original: f.filename_original,
       name: f.filename_ai,
       size: formatBytes(f.size),
-      from: f.uploaded_from,
-      uploaded: formatDate(f.created_at),
-      id: f.id
+      uploaded: formatDate(f.created_at)
     }));
     console.log(
       renderTable(rows, [
-        ["name", "NAME"],
+        ["original", "ORIGINAL"],
+        ["name", "AI NAME"],
         ["size", "SIZE"],
-        ["from", "FROM"],
-        ["uploaded", "UPLOADED"],
-        ["id", "ID"]
+        ["uploaded", "UPLOADED"]
       ])
     );
   });
