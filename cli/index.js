@@ -33,10 +33,6 @@ program
     "after",
     [
       "",
-      "Auth:",
-      "  Sign in through the SyncDrop AI desktop app first — the CLI reuses that",
-      "  session (~/.syncdrop/session.json) and never logs in on its own.",
-      "",
       "Examples:",
       "  syncdrop upload ./report.pdf",
       "  syncdrop upload ./raw.png --no-rename",
