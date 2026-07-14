@@ -4,7 +4,11 @@
   "description": "Cross-platform cloud file transfer app with AI-generated filenames.",
   "main": "electron/main.js",
   "type": "module",
+  "bin": {
+    "syncdrop": "cli/index.js"
+  },
   "scripts": {
+    "syncdrop": "node cli/index.js",
     "dev": "vite --host 0.0.0.0",
     "electron": "concurrently -k \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "vite build",
@@ -27,7 +31,8 @@
     "@capacitor/android": "^7.4.3",
     "@capacitor/app": "^7.1.2",
     "@capacitor/core": "^7.4.3",
-    "@supabase/supabase-js": "^2.50.2"
+    "@supabase/supabase-js": "^2.50.2",
+    "commander": "^12.1.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.4.3",
@@ -46,6 +51,7 @@
     "files": [
       "dist-app/**/*",
       "electron/**/*",
+      "src/core/**/*",
       "package.json"
     ],
     "win": {

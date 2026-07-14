@@ -101,6 +101,8 @@ button:disabled {
   border: 2px dashed #9fb0c6;
   border-radius: 8px;
   display: flex;
+  flex-direction: column;
+  gap: 16px;
   justify-content: center;
   margin-top: 20px;
   min-height: 220px;
@@ -109,13 +111,19 @@ button:disabled {
   transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
 }
 
+.drop-zone .upload-rename-toggle {
+  color: #475569;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
 .drop-zone.is-dragging {
   background: #f0f9ff;
   border-color: #0284c7;
   transform: translateY(-1px);
 }
 
-.drop-zone input {
+.drop-zone #file-input {
   block-size: 1px;
   inline-size: 1px;
   opacity: 0;

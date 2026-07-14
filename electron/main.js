@@ -5,6 +5,7 @@ import http from "node:http";
 import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { clearSession, writeSession } from "../src/core/session-store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -165,6 +166,22 @@ app.whenReady().then(() => {
 
   ipcMain.handle("syncdrop:open-downloads", async () => {
     await shell.openPath(app.getPath("downloads"));
+  });
+
+  // App-only auth bridge: the renderer forwards its Supabase session here so the
+  // syncdrop CLI can reuse it. The CLI never logs in on its own.
+  ipcMain.handle("syncdrop:persist-session", async (_event, payload) => {
+    if (!payload?.access_token || !payload?.refresh_token) {
+      clearSession();
+      return { cleared: true };
+    }
+    writeSession(payload);
+    return { cleared: false };
+  });
+
+  ipcMain.handle("syncdrop:clear-session", async () => {
+    clearSession();
+    return { cleared: true };
   });
 
   ipcMain.handle("syncdrop:save-url", async (event, payload) => {

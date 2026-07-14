@@ -1,7 +1,21 @@
 import "./styles.css";
 import { Capacitor } from "@capacitor/core";
 import { App } from "@capacitor/app";
-import { isSupabaseConfigured, storageBucket, supabase } from "./supabaseClient.js";
+import {
+  isSupabaseConfigured,
+  storageBucket,
+  supabase,
+  supabaseAnonKey,
+  supabaseUrl
+} from "./supabaseClient.js";
+import {
+  cleanFilename,
+  fallbackUuidFilename,
+  formatBytes,
+  getExtension,
+  isValidAiFilename,
+  makeStoragePath
+} from "./core/filenames.js";
 
 const LOGIN_CALLBACK_URL = "com.syncdrop.ai://login-callback";
 
@@ -54,6 +68,10 @@ let session = null;
 let authEmail = "";
 let otpRequested = false;
 let isBusy = false;
+// Per-upload override for the next batch of files chosen from the drop zone.
+// Defaults to the global `autoRename` setting; the drop-zone toggle overrides
+// it for that one upload only (mirrors the CLI's `--no-rename` flag).
+let renameNextUpload = settings.autoRename;
 let pendingCloudFiles = [];
 let transferStatus = {
   label: isSupabaseConfigured ? "Connect" : "Local mode",
@@ -126,43 +144,9 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function formatBytes(bytes) {
-  if (!bytes) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
-}
-
-function cleanFilename(filename) {
-  const extension = filename.match(/(\.[A-Za-z0-9]{1,12})$/)?.[1]?.toLowerCase() ?? "";
-  const base = filename
-    .replace(/(\.[A-Za-z0-9]{1,12})$/, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .replace(/-{2,}/g, "-")
-    .slice(0, 54);
-
-  return `${base || "untitled-file"}${extension}`;
-}
-
-function getExtension(filename) {
-  return filename.match(/(\.[A-Za-z0-9]{1,12})$/)?.[1]?.toLowerCase() ?? "";
-}
-
-function isValidAiFilename(value, extension) {
-  if (!value || value.length > 80) return false;
-  if (extension && !value.endsWith(extension)) return false;
-  return /^[a-z0-9]+(?:-[a-z0-9]+)*(\.[a-z0-9]{1,12})?$/.test(value);
-}
-
-function fallbackUuidFilename(id, originalFilename) {
-  return `${id}${getExtension(originalFilename)}`;
-}
-
-async function suggestCloudFilename(file, id) {
-  const fallback = settings.autoRename ? fallbackUuidFilename(id, file.name) : file.name;
-  if (!settings.autoRename || !supabase) return fallback;
+async function suggestCloudFilename(file, id, autoRename = settings.autoRename) {
+  const fallback = autoRename ? fallbackUuidFilename(id, file.name) : file.name;
+  if (!autoRename || !supabase) return fallback;
 
   let result;
   try {
@@ -194,19 +178,15 @@ async function suggestCloudFilename(file, id) {
   return suggestion;
 }
 
-function makeStoragePath(userId, id, filename) {
-  return `${userId}/${id}-${cleanFilename(filename)}`;
-}
-
 function setStatus(label, detail, progress = transferStatus.progress) {
   transferStatus = { label, detail, progress };
   render();
 }
 
-function localFileRecord(file) {
+function localFileRecord(file, autoRename = settings.autoRename) {
   return {
     id: crypto.randomUUID(),
-    filename_ai: settings.autoRename ? cleanFilename(file.name) : file.name,
+    filename_ai: autoRename ? cleanFilename(file.name) : file.name,
     filename_original: file.name,
     mime_type: file.type || "application/octet-stream",
     size: file.size,
@@ -217,14 +197,36 @@ function localFileRecord(file) {
   };
 }
 
+// Mirror the desktop session to the CLI's shared store (~/.syncdrop/session.json)
+// via the Electron main process. No-op on web/Android — only the Electron
+// preload exposes syncdrop.persistSession. Keeps CLI auth "app-only".
+function mirrorSessionToCli(nextSession) {
+  if (!window.syncdrop?.persistSession) return;
+  if (nextSession) {
+    window.syncdrop.persistSession({
+      supabaseUrl,
+      supabaseAnonKey,
+      storageBucket,
+      access_token: nextSession.access_token,
+      refresh_token: nextSession.refresh_token,
+      expires_at: nextSession.expires_at,
+      user: nextSession.user ? { id: nextSession.user.id, email: nextSession.user.email } : null
+    });
+  } else {
+    window.syncdrop.persistSession(null);
+  }
+}
+
 async function initSupabase() {
   if (!isSupabaseConfigured) return;
 
   const { data } = await supabase.auth.getSession();
   session = data.session;
+  mirrorSessionToCli(session);
 
   supabase.auth.onAuthStateChange((_event, nextSession) => {
     session = nextSession;
+    mirrorSessionToCli(nextSession);
     if (session) {
       loadCloudFiles();
     } else {
@@ -358,7 +360,7 @@ async function loadCloudFiles() {
   setStatus("Synced", `${files.length} cloud file${files.length === 1 ? "" : "s"} loaded.`, 100);
 }
 
-async function queueFiles(fileList) {
+async function queueFiles(fileList, autoRename = renameNextUpload) {
   const selectedFiles = [...fileList];
   if (selectedFiles.length === 0) return;
 
@@ -369,18 +371,18 @@ async function queueFiles(fileList) {
       return;
     }
 
-    await uploadCloudFiles(selectedFiles);
+    await uploadCloudFiles(selectedFiles, autoRename);
     return;
   }
 
-  const queuedFiles = selectedFiles.map(localFileRecord);
+  const queuedFiles = selectedFiles.map((file) => localFileRecord(file, autoRename));
   files = [...queuedFiles, ...files];
   saveJson(STORAGE_KEYS.files, files);
   setStatus("Queued", `${queuedFiles.length} file${queuedFiles.length === 1 ? "" : "s"} ready to sync.`, 0);
   simulateTransfers(queuedFiles.map((file) => file.id));
 }
 
-async function uploadCloudFiles(selectedFiles) {
+async function uploadCloudFiles(selectedFiles, autoRename = settings.autoRename) {
   if (!session) return;
   isBusy = true;
 
@@ -399,7 +401,7 @@ async function uploadCloudFiles(selectedFiles) {
     const largeFileNote = file.size >= LARGE_FILE_BYTES ? " Large file retry protection is active." : "";
     setStatus("Naming", `Requesting an AI filename for ${file.name}.${largeFileNote}`, progressBase);
 
-    const filename_ai = await suggestCloudFilename(file, id);
+    const filename_ai = await suggestCloudFilename(file, id, autoRename);
     const storage_path = makeStoragePath(session.user.id, id, filename_ai);
 
     setStatus("Uploading", `${file.name} to Supabase storage.`, progressBase);
@@ -766,6 +768,10 @@ function render() {
           <strong>Drop files here</strong>
           <span>${session ? "Files will upload to Supabase storage" : "or choose files to add a local mocked transfer"}</span>
         </label>
+        <label class="check-row upload-rename-toggle">
+          <input id="rename-toggle" type="checkbox" ${renameNextUpload ? "checked" : ""} />
+          <span>AI-rename this upload</span>
+        </label>
       </section>
 
       <section class="transfer-panel" aria-live="polite">
@@ -789,6 +795,11 @@ function attachEvents() {
   const settingsForm = document.querySelector("#settings-form");
   const authForm = document.querySelector("#auth-form");
   const otpForm = document.querySelector("#otp-form");
+  const renameToggle = document.querySelector("#rename-toggle");
+
+  renameToggle?.addEventListener("change", (event) => {
+    renameNextUpload = event.target.checked;
+  });
 
   fileInput.addEventListener("change", (event) => {
     queueFiles(event.target.files);

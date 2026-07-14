@@ -22,6 +22,56 @@ npm run dev
 npm run electron
 ```
 
+## Command-line interface (`syncdrop`)
+
+`syncdrop` is a CLI for one-shot file operations against the same Supabase
+project the desktop/mobile app uses. It does **not** have its own login: sign in
+through the SyncDrop AI desktop app once, and the app writes its session to
+`~/.syncdrop/session.json`, which the CLI reuses. Uploads that rename go through
+the same `suggest-filename` Edge Function as the app.
+
+Install/link it for local use, then run `syncdrop` (or `syncdrop help`) to see
+every command:
+
+```powershell
+npm install
+npm link          # exposes the `syncdrop` command globally
+# or, without linking:
+npm run syncdrop -- <command>
+```
+
+> `rename` needs the UPDATE policy from `supabase/migrations/0001_files_update_policy.sql`.
+> Apply it once if your database predates the rename feature.
+
+### Commands
+
+| Command | Description |
+| --- | --- |
+| `syncdrop upload <path> [--no-rename]` | Upload a file. `--no-rename` keeps the original filename (skips AI rename for that upload). |
+| `syncdrop list [count] [--since <w>] [--limit <n>] [--search <q>] [--json]` | List cloud files. `--since` accepts windows like `30m`, `5h`, `28d`, `2w`. |
+| `syncdrop download <name\|id> [--out <path>]` | Download a file. `--out` sets a destination file or directory (default: current directory). |
+| `syncdrop delete <name\|id> [--yes]` | Delete storage object + metadata. Prompts unless `--yes`. |
+| `syncdrop rename <name\|id> <new-name>` | Manually set a file's display name (no AI re-naming). |
+| `syncdrop info <name\|id> [--json]` | Show metadata for one file. |
+| `syncdrop --version` | Print the CLI version. |
+| `syncdrop help` / `syncdrop` | List all commands and flags. |
+
+Files can be referenced by their AI/original filename or by their UUID id
+(shown in `list`/`info`).
+
+### Examples
+
+```powershell
+syncdrop upload ./report.pdf
+syncdrop upload ./raw.png --no-rename
+syncdrop list 5
+syncdrop list --since 24h --search invoice
+syncdrop list --json | jq '.[].filename_ai'
+syncdrop download report.pdf --out ~/Downloads
+syncdrop rename <id> quarterly-report.pdf
+syncdrop delete report.pdf --yes
+```
+
 ## Android
 
 ```powershell
