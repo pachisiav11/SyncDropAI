@@ -30,15 +30,26 @@ through the SyncDrop AI desktop app once, and the app writes its session to
 `~/.syncdrop/session.json`, which the CLI reuses. Uploads that rename go through
 the same `suggest-filename` Edge Function as the app.
 
-Install/link it for local use, then run `syncdrop` (or `syncdrop help`) to see
-every command:
+### Install
+
+Run this once in PowerShell — it works from any folder afterward, in both
+PowerShell and cmd, with no npm commands needed from you:
 
 ```powershell
-npm install
-npm link          # exposes the `syncdrop` command globally
-# or, without linking:
-npm run syncdrop -- <command>
+iwr https://raw.githubusercontent.com/pachisiav11/SyncDropAI/main/install.ps1 -UseB | iex
 ```
+
+The installer clones/updates the repo under `%LOCALAPPDATA%\Programs\syncdrop`,
+installs the CLI's runtime dependencies, and adds a `syncdrop` command shim to
+your user PATH. Open a new terminal (or reuse the current one) and run
+`syncdrop help`. Re-run the same line anytime to update. To remove it:
+
+```powershell
+iwr https://raw.githubusercontent.com/pachisiav11/SyncDropAI/main/uninstall.ps1 -UseB | iex
+```
+
+Requires Git and Node.js (18+) on PATH. For local development from a repo
+checkout instead, `npm install` then `npm link`, or `npm run syncdrop -- <command>`.
 
 > `rename` needs the UPDATE policy from `supabase/migrations/0001_files_update_policy.sql`.
 > Apply it once if your database predates the rename feature.
