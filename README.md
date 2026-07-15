@@ -124,7 +124,17 @@ Phase 3 supports email magic-link auth, metadata loading from `public.files`, up
 
 Naming is **deferred and local**. An upload with auto-rename on lands with its original filename and sets `rename_requested`. A worker on the Windows desktop — the app's background poll while it's open, or `syncdrop autoname` — downloads the file, reads its content with a local vision model, writes `filename_ai`, and clears the flag. Uploads from the phone are named the next time the desktop is running. Nothing is sent to a paid API, and renaming never moves stored bytes.
 
-Content routing: images go to the vision model; PDFs are named from their extracted text layer; text/JSON files from their opening characters. Anything else — unsupported types, scanned PDFs with no text, or a model that returns nothing usable — **keeps its original filename**. There are no UUID filenames.
+Content routing by type:
+
+| Type | How it's named |
+| --- | --- |
+| `png` `jpg` `gif` `bmp` `tiff` | Vision model reads the image |
+| `pdf` | Extracted text layer (first pages) |
+| `html` `svg` | Title + stripped markup text |
+| `txt` `md` `csv` `json` `xml` `yaml`, source files | Opening characters |
+| everything else | **Keeps its original filename** |
+
+Anything unnamed — archives, binaries, APKs, `webp`/`heic` (no local decoder), scanned PDFs with no text layer, or a model that returns nothing usable — **keeps its original filename**. There are no UUID filenames.
 
 Setup (Windows desktop only):
 

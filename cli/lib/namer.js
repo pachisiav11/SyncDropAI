@@ -21,6 +21,27 @@ const MAX_EDGE = Number(process.env.SYNCDROP_NAMER_MAX_EDGE || 512);
 const TIMEOUT_MS = Number(process.env.SYNCDROP_NAMER_TIMEOUT_MS || 120000);
 const PDF_TEXT_CHARS = 1200;
 
+// Only what Jimp can actually decode (verified against jimp 1.6.1). This is a
+// whitelist rather than an `image/` prefix test on purpose: Jimp throws on webp,
+// heic, and avif, and the worker treats a throw as retryable, so a single such
+// upload would otherwise be re-attempted on every poll forever. Unknown image
+// types fall through to keep-original instead.
+const VISION_MIME = new Set(["image/png", "image/jpeg", "image/bmp", "image/tiff", "image/gif"]);
+
+// Text-ish formats worth reading. SVG lives here, not in VISION_MIME: it's XML,
+// so Jimp can't rasterize it but its <title>/<text> often name it outright.
+const TEXT_MIME = new Set([
+  "application/json",
+  "application/xml",
+  "application/yaml",
+  "application/javascript",
+  "application/x-sh",
+  "application/sql",
+  "image/svg+xml"
+]);
+
+const HTML_MIME = new Set(["text/html", "application/xhtml+xml"]);
+
 const IMAGE_PROMPT =
   "Name this image as a file: reply with a specific 3-6 word description of its " +
   "content. Include any app, brand, product, or document name you can read. " +
@@ -87,6 +108,24 @@ async function extractPdfText(buffer) {
   return text.replace(/\s+/g, " ").trim().slice(0, PDF_TEXT_CHARS);
 }
 
+// Readable text from markup. Feeding raw HTML to the model wastes the character
+// budget on doctype/meta/script boilerplate before any prose, so pull the title
+// (usually the best name available) and drop script/style bodies first. Also
+// used for SVG, where <title>/<text> carry the same signal.
+function extractMarkupText(buffer) {
+  const raw = buffer.toString("utf8");
+  const title = raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim() ?? "";
+  const body = raw
+    .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  // Title first so it survives the character cap even on a long page.
+  return [title, body].filter(Boolean).join(". ").slice(0, PDF_TEXT_CHARS);
+}
+
 // Turn a free-text description into a validated <base>-<words><ext> filename, or
 // null if the model gave us nothing usable (caller then keeps the original).
 function descriptionToFilename(description, originalFilename) {
@@ -112,19 +151,24 @@ export async function suggestNameFromContent({ buffer, mimeType, originalFilenam
   const mime = String(mimeType || "").toLowerCase();
   let description = null;
 
-  if (mime.startsWith("image/")) {
+  if (VISION_MIME.has(mime)) {
     const image = await toModelImage(buffer);
     description = await ollamaDescribe({ prompt: IMAGE_PROMPT, images: [image] });
   } else if (mime === "application/pdf") {
     const text = await extractPdfText(buffer);
     if (!text) return null; // scanned/imageless PDF — no text layer to read
     description = await ollamaDescribe({ prompt: TEXT_PROMPT + text });
-  } else if (mime.startsWith("text/") || mime === "application/json") {
+  } else if (HTML_MIME.has(mime) || mime === "image/svg+xml") {
+    const text = extractMarkupText(buffer);
+    if (!text) return null;
+    description = await ollamaDescribe({ prompt: TEXT_PROMPT + text });
+  } else if (mime.startsWith("text/") || TEXT_MIME.has(mime)) {
     const text = buffer.toString("utf8").replace(/\s+/g, " ").trim().slice(0, PDF_TEXT_CHARS);
     if (!text) return null;
     description = await ollamaDescribe({ prompt: TEXT_PROMPT + text });
   } else {
-    return null; // unsupported type — keep original
+    // Unsupported (archives, binaries, webp/heic we can't decode) — keep original.
+    return null;
   }
 
   return descriptionToFilename(description, originalFilename);
