@@ -142,7 +142,7 @@ Tunable via environment variables:
 | `SYNCDROP_NAMER_MAX_EDGE` | `512` | Longest image edge sent to the model; higher is more accurate but slower |
 | `SYNCDROP_NAMER_TIMEOUT_MS` | `120000` | Per-file inference timeout |
 
-On CPU-only hardware expect roughly 10-20s per image, which is why naming is a background pass rather than part of upload. If Ollama isn't running, files simply keep their original names and are retried on the next pass.
+On CPU-only hardware expect roughly 10-20s per image, which is why naming is a background pass rather than part of upload — the upload itself stays instant. The desktop app checks for pending files every 5s while open, so a name typically appears within a few seconds of the inference finishing. If Ollama isn't running, files simply keep their original names and are retried on the next pass.
 
 Phase 5 adds the Electron preload bridge for Windows downloads. In Electron, signed Supabase download URLs are saved into the user's Downloads folder with sanitized, collision-safe filenames. Use `npm run build:electron` for the packaged renderer build and `npm run dist` to create the Windows installer with electron-builder. Installer artifacts are written to `release/`.
 

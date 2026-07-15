@@ -13,8 +13,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
 
 const AUTH_CALLBACK_PORT = 3000;
-// How often the background worker looks for files awaiting AI naming.
-const RENAME_POLL_MS = 60000;
+// How often the background worker looks for files awaiting AI naming. Naming a
+// file takes ~15s on CPU, so this is deliberately much shorter than a pass: it
+// keeps the delay before a name appears close to the inference time itself
+// rather than adding a poll wait on top. Ticks that land mid-pass are dropped by
+// the renameRunning guard, so a short interval can't queue work up.
+const RENAME_POLL_MS = 5000;
 let mainWindow = null;
 let authServer = null;
 let renameTimer = null;
