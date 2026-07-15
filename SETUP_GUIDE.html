@@ -173,7 +173,7 @@
     <ol>
       <li>Go to <strong>Storage</strong> in the dashboard and create a new <strong>private</strong> bucket named exactly <code>files</code> (matches <code>VITE_SUPABASE_BUCKET</code>).</li>
       <li>Go to <strong>SQL Editor</strong>, open the project's <code>supabase/schema.sql</code> file in your repo, and run its contents to create the <code>public.files</code> table and Row Level Security policies.</li>
-      <li>Optional: deploy the <code>supabase/functions/suggest-filename</code> Edge Function if you want AI-generated filenames (requires an OpenAI key set as a function secret).</li>
+      <li>Optional: deploy the <code>supabase/functions/suggest-filename</code> Edge Function if you want AI-generated filenames (requires an Anthropic key set as a function secret — see step 5).</li>
     </ol>
   </section>
 
@@ -199,16 +199,22 @@
     <pre><code>VITE_SUPABASE_URL=https://&lt;your-project-ref&gt;.supabase.co
 VITE_SUPABASE_ANON_KEY=&lt;your-anon-public-key&gt;
 VITE_SUPABASE_BUCKET=files
-SUPABASE_FUNCTIONS_URL=https://&lt;your-project-ref&gt;.supabase.co/functions/v1
-OPENAI_MODEL=gpt-5.4-nano</code></pre>
+SUPABASE_FUNCTIONS_URL=https://&lt;your-project-ref&gt;.supabase.co/functions/v1</code></pre>
     <table>
       <tr><th>Variable</th><th>Required</th><th>Used for</th></tr>
       <tr><td><code>VITE_SUPABASE_URL</code></td><td>Yes</td><td>Connecting the app to your Supabase project</td></tr>
       <tr><td><code>VITE_SUPABASE_ANON_KEY</code></td><td>Yes</td><td>Public client auth/storage access</td></tr>
       <tr><td><code>VITE_SUPABASE_BUCKET</code></td><td>No (defaults to <code>files</code>)</td><td>Storage bucket name</td></tr>
       <tr><td><code>SUPABASE_FUNCTIONS_URL</code></td><td>No</td><td>AI filename suggestion Edge Function</td></tr>
-      <tr><td><code>OPENAI_MODEL</code></td><td>No</td><td>Model used by the Edge Function</td></tr>
     </table>
+    <div class="callout warn">
+      <strong>The Anthropic API key is NOT a <code>.env</code> variable.</strong>
+      <code>.env</code> values are baked into the client bundle by Vite and ship inside the Electron and Android apps — never put a secret key here. The <code>suggest-filename</code> Edge Function reads its key from a Supabase <em>function secret</em> instead. Set it once with the Supabase CLI:
+      <pre><code>supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
+# optional, defaults to claude-haiku-4-5:
+supabase secrets set ANTHROPIC_MODEL=claude-haiku-4-5</code></pre>
+      (Or Dashboard → Edge Functions → Manage secrets.) The key stays server-side and is never exposed to the app.
+    </div>
     <div class="callout warn">
       <strong>Vite inlines these at build time, not runtime.</strong>
       Any time you change <code>.env</code>, you must rebuild (step 6) — restarting the app alone does nothing.

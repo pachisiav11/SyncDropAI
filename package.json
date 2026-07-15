@@ -23,7 +23,7 @@
     "capacitor",
     "supabase",
     "file-transfer",
-    "openai"
+    "anthropic"
   ],
   "author": "pachisiav11",
   "license": "MIT",
