@@ -1,19 +1,14 @@
 // Supabase file operations for the CLI.
 //
 // These MIRROR the browser app's logic in src/app.js (loadCloudFiles,
-// uploadCloudFiles, suggestCloudFilename, removeFile, downloadFile). The app is
-// tightly coupled to the DOM / browser File objects, so its data calls are not
-// importable here; this is a deliberate, minimal re-implementation. If you
-// change the storage/metadata contract in one place, update the other.
+// uploadCloudFiles, removeFile, downloadFile). The app is tightly coupled to the
+// DOM / browser File objects, so its data calls are not importable here; this is
+// a deliberate, minimal re-implementation. If you change the storage/metadata
+// contract in one place, update the other.
 
 import fs from "node:fs";
 import path from "node:path";
-import {
-  fallbackUuidFilename,
-  getExtension,
-  isValidAiFilename,
-  makeStoragePath
-} from "../../src/core/filenames.js";
+import { makeStoragePath } from "../../src/core/filenames.js";
 import { CliError } from "./client.js";
 import { guessMimeType, looksLikeUuid } from "./util.js";
 
@@ -59,26 +54,6 @@ export async function resolveFile({ supabase, identifier }) {
   return data[0];
 }
 
-// Mirrors src/app.js suggestCloudFilename: ask the edge function, validate,
-// fall back to a UUID-based name (or the original name when renaming is off).
-export async function suggestFilename({ supabase, autoRename, originalFilename, mimeType, id }) {
-  const fallback = autoRename ? fallbackUuidFilename(id, originalFilename) : originalFilename;
-  if (!autoRename) return fallback;
-
-  let result;
-  try {
-    result = await supabase.functions.invoke("suggest-filename", {
-      body: { originalFilename, mimeType: mimeType || "application/octet-stream" }
-    });
-    if (result.error) throw result.error;
-  } catch {
-    return fallback;
-  }
-
-  const suggestion = String(result.data?.filename ?? "").trim();
-  return isValidAiFilename(suggestion, getExtension(originalFilename)) ? suggestion : fallback;
-}
-
 export async function uploadFile({ supabase, bucket, userId, filePath, noRename }) {
   if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
     throw new CliError(`File not found: ${filePath}`);
@@ -89,13 +64,12 @@ export async function uploadFile({ supabase, bucket, userId, filePath, noRename 
   const mimeType = guessMimeType(originalFilename);
   const id = crypto.randomUUID();
 
-  const filename_ai = await suggestFilename({
-    supabase,
-    autoRename: !noRename,
-    originalFilename,
-    mimeType,
-    id
-  });
+  // Deferred naming: the file lands with its original name and (unless
+  // --no-rename) is flagged for the local worker to rename later from its
+  // content. No naming API is called at upload time — `syncdrop autoname` or the
+  // desktop app's background poll does the work for free with a local model.
+  const filename_ai = originalFilename;
+  const rename_requested = !noRename;
   const storage_path = makeStoragePath(userId, id, filename_ai);
 
   const upload = await supabase.storage
@@ -111,6 +85,7 @@ export async function uploadFile({ supabase, bucket, userId, filePath, noRename 
     storage_path,
     mime_type: mimeType,
     size: buffer.length,
+    rename_requested,
     uploaded_from: "windows"
   });
 
@@ -120,7 +95,14 @@ export async function uploadFile({ supabase, bucket, userId, filePath, noRename 
     throw new CliError(`Saving metadata failed: ${insert.error.message}`);
   }
 
-  return { id, filename_ai, filename_original: originalFilename, size: buffer.length, storage_path };
+  return {
+    id,
+    filename_ai,
+    filename_original: originalFilename,
+    size: buffer.length,
+    storage_path,
+    rename_requested
+  };
 }
 
 export async function getSignedUrl({ supabase, bucket, file }) {

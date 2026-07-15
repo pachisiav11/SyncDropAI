@@ -25,12 +25,19 @@ for implementing the CLI — not a design doc to leave unfinished, build it.
 ### `syncdrop upload <path>`
 - Uploads a file (by filename in cwd, or a full/relative path) to the same
   Supabase Storage bucket + `public.files` metadata table the app uses.
-- `--no-rename` flag: skip the AI filename suggestion for this upload and
-  keep the original filename (mirrors the app-side setting described below).
-- Without `--no-rename`, follow the existing behavior in `src/app.js`
-  (`suggestFilename`/`autoRename` path around line 164) — call the
-  `suggest-filename` Edge Function, fall back to a UUID filename on
-  failure/invalid output.
+- `--no-rename` flag: skip AI naming for this upload and keep the original
+  filename permanently (mirrors the app-side setting described below).
+- Without `--no-rename`, naming is DEFERRED: the file uploads with its original
+  name and the row is flagged `rename_requested`. A local worker on the desktop
+  (`syncdrop autoname`, or the app's background poll) later names it from its
+  content with a local vision model. Uploads never call a naming API.
+
+### `syncdrop autoname`
+- Names files awaiting AI rename, reading their content with a local vision
+  model served by Ollama (default `minicpm-v4.6`). Zero API cost.
+- `--limit <n>`: max files to name in one pass (default 25).
+- Files whose content can't be identified (unsupported type, scanned PDF, model
+  returned nothing) simply keep their original name — never a UUID.
 
 ### `syncdrop list`
 - Lists files from `public.files` metadata table.

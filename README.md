@@ -1,13 +1,13 @@
 # SyncDrop AI
 
-SyncDrop AI is a cross-platform file transfer app for Windows and Android. It uses a shared HTML/CSS/JavaScript frontend, Electron for Windows, Capacitor for Android, Supabase for auth/storage/metadata, and an AI filename suggestion function during upload.
+SyncDrop AI is a cross-platform file transfer app for Windows and Android. It uses a shared HTML/CSS/JavaScript frontend, Electron for Windows, Capacitor for Android, Supabase for auth/storage/metadata, and a local vision model that names uploaded files from their content.
 
 ## Phase Plan
 
 1. **Foundation**: project skeleton, shared frontend shell, Electron entry, Capacitor config, Supabase schema, AI naming function stub, docs.
 2. **Local UI MVP**: upload area, file list, settings storage, progress states, mocked transfer flow.
 3. **Supabase Integration**: auth, file metadata table, storage upload/list/delete/download, RLS policies.
-4. **AI Rename Integration**: call the Supabase Edge Function once per upload, validate filename output, fall back to UUID filenames.
+4. **AI Rename Integration**: name files from their content with a local vision model, validate filename output, fall back to the original filename.
 5. **Electron Packaging**: Windows download path behavior, preload bridge, installer build.
 6. **Android Packaging**: Capacitor Android project, Android permissions, APK build docs.
 7. **Hardening**: resumable/chunked large-file uploads, offline retry, local metadata cache, production deployment notes.
@@ -27,8 +27,8 @@ npm run electron
 `syncdrop` is a CLI for one-shot file operations against the same Supabase
 project the desktop/mobile app uses. It does **not** have its own login: sign in
 through the SyncDrop AI desktop app once, and the app writes its session to
-`~/.syncdrop/session.json`, which the CLI reuses. Uploads that rename go through
-the same `suggest-filename` Edge Function as the app.
+`~/.syncdrop/session.json`, which the CLI reuses. Uploads that rename are named
+locally by `syncdrop autoname`, the same worker the desktop app runs.
 
 ### Install
 
@@ -112,15 +112,37 @@ VITE_SUPABASE_ANON_KEY=
 VITE_SUPABASE_BUCKET=files
 ```
 
-Do not ship production Anthropic keys inside Electron or Android builds. The intended production path is to keep the Anthropic API key in a Supabase Edge Function secret (`supabase secrets set ANTHROPIC_API_KEY=sk-ant-...`) and call that function from the client.
+Naming runs on a local model, so no AI API key is needed for normal use. The `suggest-filename` Edge Function remains deployed as an optional fallback; if you wire it back up, keep its Anthropic key in a Supabase Edge Function secret (`supabase secrets set ANTHROPIC_API_KEY=sk-ant-...`) and call the function from the client. Never ship AI API keys inside Electron or Android builds.
 
 ## Supabase
 
-The schema and RLS policy examples are in `supabase/schema.sql`. Create a private storage bucket named `files`, enable Row Level Security, and deploy the `suggest-filename` function for AI naming.
+The schema and RLS policy examples are in `supabase/schema.sql`. Create a private storage bucket named `files` and enable Row Level Security. Existing databases need the migrations in `supabase/migrations/` applied (0001 allows renames, 0002 adds the `rename_requested` flag the naming worker uses).
 
 Phase 3 supports email magic-link auth, metadata loading from `public.files`, uploads into Supabase Storage, metadata inserts, signed download URLs, and delete flows. Without Supabase env vars, the app stays in local mock mode for UI development.
 
-Phase 4 calls the `suggest-filename` Edge Function once per cloud upload when auto-rename is enabled. The client validates the returned lowercase hyphenated filename and falls back to a UUID filename with the original extension when the function is unavailable or returns invalid output.
+## AI naming (local)
+
+Naming is **deferred and local**. An upload with auto-rename on lands with its original filename and sets `rename_requested`. A worker on the Windows desktop — the app's background poll while it's open, or `syncdrop autoname` — downloads the file, reads its content with a local vision model, writes `filename_ai`, and clears the flag. Uploads from the phone are named the next time the desktop is running. Nothing is sent to a paid API, and renaming never moves stored bytes.
+
+Content routing: images go to the vision model; PDFs are named from their extracted text layer; text/JSON files from their opening characters. Anything else — unsupported types, scanned PDFs with no text, or a model that returns nothing usable — **keeps its original filename**. There are no UUID filenames.
+
+Setup (Windows desktop only):
+
+```bash
+# Install Ollama from https://ollama.com, then:
+ollama pull minicpm-v4.6
+```
+
+Tunable via environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OLLAMA_HOST` | `http://127.0.0.1:11434` | Where Ollama is listening |
+| `SYNCDROP_NAMER_MODEL` | `minicpm-v4.6` | Vision model to use |
+| `SYNCDROP_NAMER_MAX_EDGE` | `512` | Longest image edge sent to the model; higher is more accurate but slower |
+| `SYNCDROP_NAMER_TIMEOUT_MS` | `120000` | Per-file inference timeout |
+
+On CPU-only hardware expect roughly 10-20s per image, which is why naming is a background pass rather than part of upload. If Ollama isn't running, files simply keep their original names and are retried on the next pass.
 
 Phase 5 adds the Electron preload bridge for Windows downloads. In Electron, signed Supabase download URLs are saved into the user's Downloads folder with sanitized, collision-safe filenames. Use `npm run build:electron` for the packaged renderer build and `npm run dist` to create the Windows installer with electron-builder. Installer artifacts are written to `release/`.
 

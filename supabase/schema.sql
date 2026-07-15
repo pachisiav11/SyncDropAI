@@ -7,6 +7,9 @@ create table if not exists public.files (
   mime_type text,
   size bigint not null check (size >= 0),
   uploaded_from text not null check (uploaded_from in ('windows', 'android', 'web')),
+  -- Set at upload when auto-rename is on; a local worker on the desktop names the
+  -- file from its content later and clears this. See migration 0002.
+  rename_requested boolean not null default false,
   created_at timestamptz not null default now()
 );
 
@@ -33,6 +36,11 @@ create policy "users can delete their own files"
 
 create index if not exists files_user_created_at_idx
   on public.files (user_id, created_at desc);
+
+-- Partial index: the naming worker only ever scans rows still awaiting a name.
+create index if not exists files_rename_requested_idx
+  on public.files (rename_requested)
+  where rename_requested;
 
 -- Create a private Supabase Storage bucket named "files" separately.
 -- Client uploads use paths shaped as: {auth.uid()}/{file-id}-{filename}

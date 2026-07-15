@@ -19,6 +19,7 @@ import {
   resolveFile,
   uploadFile
 } from "./lib/files.js";
+import { processPendingRenames } from "./lib/worker.js";
 import { formatBytes, formatDate, parseSince, renderTable } from "./lib/util.js";
 
 const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -43,12 +44,14 @@ program
       "  download  --out <path>        destination file or directory",
       "  delete    -y, --yes           skip the confirmation prompt",
       "  info      --json              print raw JSON",
+      "  autoname  --limit <n>         max files to name in this pass (default 25)",
       "",
       "Run `syncdrop <command> --help` for a single command's options.",
       "",
       "Examples:",
       "  syncdrop upload ./report.pdf",
       "  syncdrop upload ./raw.png --no-rename",
+      "  syncdrop autoname            name everything awaiting AI rename",
       "  syncdrop list 5",
       "  syncdrop list --since 24h --search invoice",
       "  syncdrop list --json | jq '.[].filename_ai'",
@@ -76,7 +79,10 @@ program
       filePath: path.resolve(filePath),
       noRename: options.rename === false
     });
-    console.log(`Uploaded ${result.filename_original} → ${result.filename_ai} (${formatBytes(result.size)})`);
+    console.log(`Uploaded ${result.filename_original} (${formatBytes(result.size)})`);
+    if (result.rename_requested) {
+      console.log(`Queued for AI naming — run \`syncdrop autoname\` (or open the desktop app) to name it.`);
+    }
     console.log(`id: ${result.id}`);
   });
 
@@ -174,6 +180,36 @@ program
     const file = await resolveFile({ supabase, identifier });
     const updated = await renameFile({ supabase, file, newName });
     console.log(`Renamed ${file.filename_ai} → ${updated.filename_ai}`);
+  });
+
+program
+  .command("autoname")
+  .option("--limit <n>", "max number of files to name in this pass", (v) => parseInt(v, 10))
+  .description("name files awaiting AI rename, using a local vision model via Ollama")
+  .action(async (options) => {
+    const { supabase, bucket } = await getClient();
+    const limit = options.limit ?? 25;
+    if (Number.isNaN(limit)) throw new CliError("Invalid --limit value.");
+
+    const summary = await processPendingRenames({
+      supabase,
+      bucket,
+      limit,
+      onProgress: ({ original, result, name }) => {
+        if (result === "named") console.log(`  named   ${original} → ${name}`);
+        else if (result === "kept") console.log(`  kept    ${original} (couldn't identify content)`);
+        else console.log(`  failed  ${original}: ${name}`);
+      }
+    });
+
+    if (summary.total === 0) {
+      console.log("Nothing to name — no files are awaiting AI rename.");
+      return;
+    }
+    console.log(
+      `\nDone: ${summary.named} named, ${summary.kept} kept, ${summary.failed} failed ` +
+        `(of ${summary.total}).`
+    );
   });
 
 program

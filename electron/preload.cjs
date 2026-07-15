@@ -17,5 +17,12 @@ contextBridge.exposeInMainWorld("syncdrop", {
     const handler = (_event, tokens) => callback(tokens);
     ipcRenderer.on("syncdrop:auth-tokens", handler);
     return () => ipcRenderer.removeListener("syncdrop:auth-tokens", handler);
+  },
+  // Fires after the background worker renames one or more files, so the UI can
+  // refresh to show the new names.
+  onFilesRenamed: (callback) => {
+    const handler = (_event, summary) => callback(summary);
+    ipcRenderer.on("syncdrop:files-renamed", handler);
+    return () => ipcRenderer.removeListener("syncdrop:files-renamed", handler);
   }
 });

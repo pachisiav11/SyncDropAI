@@ -8,14 +8,7 @@ import {
   supabaseAnonKey,
   supabaseUrl
 } from "./supabaseClient.js";
-import {
-  cleanFilename,
-  fallbackUuidFilename,
-  formatBytes,
-  getExtension,
-  isValidAiFilename,
-  makeStoragePath
-} from "./core/filenames.js";
+import { cleanFilename, formatBytes, makeStoragePath } from "./core/filenames.js";
 
 const LOGIN_CALLBACK_URL = "com.syncdrop.ai://login-callback";
 
@@ -144,40 +137,6 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-async function suggestCloudFilename(file, id, autoRename = settings.autoRename) {
-  const fallback = autoRename ? fallbackUuidFilename(id, file.name) : file.name;
-  if (!autoRename || !supabase) return fallback;
-
-  let result;
-  try {
-    result = await withRetry(
-      async () => {
-        const response = await supabase.functions.invoke("suggest-filename", {
-          body: {
-            originalFilename: file.name,
-            mimeType: file.type || "application/octet-stream"
-          }
-        });
-
-        if (response.error) throw response.error;
-        return response;
-      },
-      "Naming"
-    );
-  } catch {
-    return fallback;
-  }
-
-  const suggestion = String(result.data?.filename ?? "").trim();
-  const extension = getExtension(file.name);
-
-  if (!isValidAiFilename(suggestion, extension)) {
-    return fallback;
-  }
-
-  return suggestion;
-}
-
 function setStatus(label, detail, progress = transferStatus.progress) {
   transferStatus = { label, detail, progress };
   render();
@@ -257,6 +216,14 @@ async function initSupabase() {
       isBusy = false;
       otpRequested = false;
       setStatus(error ? "Sign-in failed" : "Signed in", error?.message ?? "Cloud sync is ready.", error ? 0 : 100);
+    });
+  }
+
+  // Electron: the background worker names deferred files (including phone
+  // uploads); refresh the list when it renames any so the new names appear.
+  if (window.syncdrop?.onFilesRenamed) {
+    window.syncdrop.onFilesRenamed(() => {
+      loadCloudFiles();
     });
   }
 }
@@ -398,10 +365,11 @@ async function uploadCloudFiles(selectedFiles, autoRename = settings.autoRename)
       return;
     }
 
-    const largeFileNote = file.size >= LARGE_FILE_BYTES ? " Large file retry protection is active." : "";
-    setStatus("Naming", `Requesting an AI filename for ${file.name}.${largeFileNote}`, progressBase);
-
-    const filename_ai = await suggestCloudFilename(file, id, autoRename);
+    // Deferred naming: upload with the original name and (when auto-rename is on)
+    // flag the row for the desktop's local worker to rename later from content.
+    // No naming API is called here, so uploads are instant and cost nothing.
+    const filename_ai = file.name;
+    const rename_requested = Boolean(autoRename);
     const storage_path = makeStoragePath(session.user.id, id, filename_ai);
 
     setStatus("Uploading", `${file.name} to Supabase storage.`, progressBase);
@@ -445,6 +413,7 @@ async function uploadCloudFiles(selectedFiles, autoRename = settings.autoRename)
             storage_path,
             mime_type: file.type || "application/octet-stream",
             size: file.size,
+            rename_requested,
             uploaded_from: window.syncdrop?.platform ?? "web"
           });
 

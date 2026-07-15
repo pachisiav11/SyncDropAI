@@ -32,7 +32,9 @@
     "@capacitor/app": "^7.1.2",
     "@capacitor/core": "^7.4.3",
     "@supabase/supabase-js": "^2.50.2",
-    "commander": "^12.1.0"
+    "commander": "^12.1.0",
+    "jimp": "^1.6.1",
+    "pdfjs-dist": "^6.1.200"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.4.3",
@@ -52,6 +54,7 @@
       "dist-app/**/*",
       "electron/**/*",
       "src/core/**/*",
+      "cli/**/*",
       "package.json"
     ],
     "win": {

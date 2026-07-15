@@ -6,13 +6,19 @@ import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { clearSession, writeSession } from "../src/core/session-store.js";
+import { getClient } from "../cli/lib/client.js";
+import { processPendingRenames } from "../cli/lib/worker.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
 
 const AUTH_CALLBACK_PORT = 3000;
+// How often the background worker looks for files awaiting AI naming.
+const RENAME_POLL_MS = 60000;
 let mainWindow = null;
 let authServer = null;
+let renameTimer = null;
+let renameRunning = false;
 
 // Loopback server that receives the Supabase email-magic-link redirect.
 // Supabase redirects the browser to http://localhost:3000/#access_token=...&refresh_token=...
@@ -61,6 +67,34 @@ function startAuthServer() {
   });
 
   authServer.listen(AUTH_CALLBACK_PORT, "127.0.0.1");
+}
+
+// Background deferred-naming worker. While the app is open it periodically names
+// any files flagged rename_requested (including uploads from the phone) using
+// the local vision model, reusing the same session the CLI does. Silently no-ops
+// when not signed in or when the local model / Ollama isn't reachable — those
+// files simply keep their flag and get retried on the next tick.
+async function runRenamePass() {
+  if (renameRunning) return;
+  renameRunning = true;
+  try {
+    const { supabase, bucket } = await getClient();
+    const summary = await processPendingRenames({ supabase, bucket, limit: 25 });
+    if (summary.named > 0 && mainWindow && !mainWindow.isDestroyed()) {
+      // Nudge the renderer to refresh its file list so new names show up.
+      mainWindow.webContents.send("syncdrop:files-renamed", summary);
+    }
+  } catch {
+    // Not signed in, Ollama down, or offline — try again next tick.
+  } finally {
+    renameRunning = false;
+  }
+}
+
+function startRenameWorker() {
+  if (renameTimer) return;
+  renameTimer = setInterval(runRenamePass, RENAME_POLL_MS);
+  runRenamePass(); // don't wait a full interval for the first pass
 }
 
 function sanitizeFilename(filename) {
@@ -176,6 +210,9 @@ app.whenReady().then(() => {
       return { cleared: true };
     }
     writeSession(payload);
+    // A fresh sign-in may have a backlog waiting (e.g. phone uploads) — drain it
+    // now rather than waiting for the next poll tick.
+    runRenamePass();
     return { cleared: false };
   });
 
@@ -212,6 +249,7 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+  startRenameWorker();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -224,6 +262,10 @@ app.on("will-quit", () => {
   if (authServer) {
     authServer.close();
     authServer = null;
+  }
+  if (renameTimer) {
+    clearInterval(renameTimer);
+    renameTimer = null;
   }
 });
 

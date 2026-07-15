@@ -25,10 +25,6 @@ export function isValidAiFilename(value, extension) {
   return /^[a-z0-9]+(?:-[a-z0-9]+)*(\.[a-z0-9]{1,12})?$/.test(value);
 }
 
-export function fallbackUuidFilename(id, originalFilename) {
-  return `${id}${getExtension(originalFilename)}`;
-}
-
 export function makeStoragePath(userId, id, filename) {
   return `${userId}/${id}-${cleanFilename(filename)}`;
 }
