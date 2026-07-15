@@ -27,29 +27,47 @@ async function fetchPending({ supabase, limit }) {
   return data ?? [];
 }
 
-// Clear the flag without renaming — used when the content can't be identified
-// (unsupported type, scanned PDF, model gave nothing). The file simply keeps
-// its original name instead of getting a UUID or an invented one.
-async function clearFlag({ supabase, id, filename_ai }) {
-  const { error } = await supabase
+// Take ownership of candidate rows before doing any work. Selecting pending rows
+// is not enough: `syncdrop autoname` and the desktop app's poll run as separate
+// processes against the same table, so without this both see the same row and
+// both spend ~15s of CPU naming it, with the later write silently winning.
+//
+// Clearing the flag IS the claim, and `.eq("rename_requested", true)` makes it
+// atomic — Postgres serializes the concurrent UPDATEs, so exactly one worker
+// matches and the loser gets back zero rows. Only rows returned here are ours.
+// Failures re-queue via requeue() below; a hard crash mid-pass leaves the file
+// with its original name and no retry, which is the same outcome as an
+// unidentifiable file, so no lease/timeout column is needed.
+async function claimPending({ supabase, candidates }) {
+  if (candidates.length === 0) return [];
+  const { data, error } = await supabase
     .from("files")
-    .update({ rename_requested: false, filename_ai })
-    .eq("id", id);
-  if (error) throw new CliError(`Could not clear rename flag for ${id}: ${error.message}`);
+    .update({ rename_requested: false })
+    .in("id", candidates.map((file) => file.id))
+    .eq("rename_requested", true)
+    .select(PENDING_COLUMNS);
+  if (error) throw new CliError(`Could not claim files for naming: ${error.message}`);
+  return data ?? [];
 }
 
+// Hand a file back so a later pass retries it.
+async function requeue({ supabase, id }) {
+  await supabase.from("files").update({ rename_requested: true }).eq("id", id);
+}
+
+// The claim already cleared rename_requested, so this only writes the name.
 async function applyName({ supabase, id, filename_ai }) {
-  const { error } = await supabase
-    .from("files")
-    .update({ rename_requested: false, filename_ai })
-    .eq("id", id);
+  const { error } = await supabase.from("files").update({ filename_ai }).eq("id", id);
   if (error) throw new CliError(`Could not save name for ${id}: ${error.message}`);
 }
 
 // Process every pending file once. `onProgress` (optional) is called per file
 // with { original, result, name } so callers can log. Returns tallies.
 export async function processPendingRenames({ supabase, bucket, limit = 25, onProgress } = {}) {
-  const pending = await fetchPending({ supabase, limit });
+  const candidates = await fetchPending({ supabase, limit });
+  // Rows another worker got to first are dropped here, so we never duplicate its
+  // inference — hence total reflects what we actually own, not what we saw.
+  const pending = await claimPending({ supabase, candidates });
   const summary = { total: pending.length, named: 0, kept: 0, failed: 0 };
 
   for (const file of pending) {
@@ -72,13 +90,15 @@ export async function processPendingRenames({ supabase, bucket, limit = 25, onPr
         summary.named++;
         onProgress?.({ original: file.filename_original, result: "named", name: suggestion });
       } else {
-        await clearFlag({ supabase, id: file.id, filename_ai: file.filename_ai });
+        // Unidentifiable: keep the current name. The claim already dropped the
+        // flag, so there's nothing to write.
         summary.kept++;
         onProgress?.({ original: file.filename_original, result: "kept", name: file.filename_ai });
       }
     } catch (error) {
-      // Leave the flag set so a later pass retries this file, but don't let one
-      // bad file stop the batch.
+      // Hand the file back so a later pass retries it, but don't let one bad
+      // file stop the batch.
+      await requeue({ supabase, id: file.id });
       summary.failed++;
       onProgress?.({ original: file.filename_original, result: "failed", name: error.message });
     }
