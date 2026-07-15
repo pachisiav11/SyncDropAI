@@ -142,6 +142,16 @@ function setStatus(label, detail, progress = transferStatus.progress) {
   render();
 }
 
+// `window.syncdrop` only exists in Electron (preload sets platform: "windows"),
+// so Capacitor has to be asked separately or native uploads look like web ones.
+// Anything other than Android maps to "web" to satisfy the uploaded_from check
+// constraint in supabase/schema.sql.
+function currentPlatform() {
+  if (window.syncdrop?.platform) return window.syncdrop.platform;
+  if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") return "android";
+  return "web";
+}
+
 function localFileRecord(file, autoRename = settings.autoRename) {
   return {
     id: crypto.randomUUID(),
@@ -149,7 +159,7 @@ function localFileRecord(file, autoRename = settings.autoRename) {
     filename_original: file.name,
     mime_type: file.type || "application/octet-stream",
     size: file.size,
-    uploaded_from: window.syncdrop?.platform ?? "web",
+    uploaded_from: currentPlatform(),
     status: "queued",
     progress: 0,
     created_at: new Date().toISOString()
@@ -414,7 +424,7 @@ async function uploadCloudFiles(selectedFiles, autoRename = settings.autoRename)
             mime_type: file.type || "application/octet-stream",
             size: file.size,
             rename_requested,
-            uploaded_from: window.syncdrop?.platform ?? "web"
+            uploaded_from: currentPlatform()
           });
 
           if (response.error) throw response.error;
