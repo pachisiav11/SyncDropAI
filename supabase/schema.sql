@@ -42,6 +42,16 @@ create index if not exists files_rename_requested_idx
   on public.files (rename_requested)
   where rename_requested;
 
+-- Stream row changes to signed-in clients so a device shows an upload from
+-- another device as it lands, and its AI name as the worker writes it. Realtime
+-- only publishes tables in this publication. See migration 0003.
+alter publication supabase_realtime add table public.files;
+
+-- Realtime checks the old row against the RLS select policy (and the client's
+-- user_id filter) before delivering an update/delete; the default replica
+-- identity carries only the primary key, so those events would be dropped.
+alter table public.files replica identity full;
+
 -- Create a private Supabase Storage bucket named "files" separately.
 -- Client uploads use paths shaped as: {auth.uid()}/{file-id}-{filename}
 

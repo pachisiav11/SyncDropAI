@@ -116,7 +116,9 @@ Naming runs on a local model, so no AI API key is needed for normal use. The `su
 
 ## Supabase
 
-The schema and RLS policy examples are in `supabase/schema.sql`. Create a private storage bucket named `files` and enable Row Level Security. Existing databases need the migrations in `supabase/migrations/` applied (0001 allows renames, 0002 adds the `rename_requested` flag the naming worker uses).
+The schema and RLS policy examples are in `supabase/schema.sql`. Create a private storage bucket named `files` and enable Row Level Security. Existing databases need the migrations in `supabase/migrations/` applied (0001 allows renames, 0002 adds the `rename_requested` flag the naming worker uses, 0003 streams row changes so a file uploaded on one device appears on the others as it lands).
+
+Note that 0003 is what makes uploads show up live. Without it the app still runs, but each device only sees the others' uploads when it next opens or refreshes, because Realtime reports a healthy subscription for an unpublished table and then silently delivers nothing.
 
 Phase 3 supports email magic-link auth, metadata loading from `public.files`, uploads into Supabase Storage, metadata inserts, signed download URLs, and delete flows. Without Supabase env vars, the app stays in local mock mode for UI development.
 

@@ -84,8 +84,12 @@ async function runRenamePass() {
   try {
     const { supabase, bucket } = await getClient();
     const summary = await processPendingRenames({ supabase, bucket, limit: 25 });
-    if (summary.named > 0 && mainWindow && !mainWindow.isDestroyed()) {
-      // Nudge the renderer to refresh its file list so new names show up.
+    // Nudge the renderer to refresh its file list. Every file the pass owned
+    // changed a row -- a kept file still had its rename_requested cleared -- and
+    // gating this on `named` meant a phone photo we can't decode (heic, webp)
+    // was processed but never shown. The renderer ignores the nudge when its
+    // live channel is up and has already applied the change.
+    if (summary.total > 0 && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("syncdrop:files-renamed", summary);
     }
   } catch {

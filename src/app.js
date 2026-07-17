@@ -66,6 +66,17 @@ let isBusy = false;
 // it for that one upload only (mirrors the CLI's `--no-rename` flag).
 let renameNextUpload = settings.autoRename;
 let pendingCloudFiles = [];
+let filesChannel = null;
+// Whether the live channel has actually delivered a change. Deliberately not
+// the subscribe() status: Realtime reports SUBSCRIBED for a table that isn't in
+// the supabase_realtime publication and then silently sends nothing (verified
+// against this project before migration 0003), so trusting the status would
+// switch off the fallback below in exactly the case that needs it. Proof of
+// delivery is the only honest signal, so the fallback stays until one arrives.
+let filesLive = false;
+// Rows this device just inserted come back on the socket too. uploadCloudFiles()
+// already accounts for them, so they must not be announced as new arrivals.
+const localUploadIds = new Set();
 let transferStatus = {
   label: isSupabaseConfigured ? "Connect" : "Local mode",
   detail: isSupabaseConfigured
@@ -198,7 +209,9 @@ async function initSupabase() {
     mirrorSessionToCli(nextSession);
     if (session) {
       loadCloudFiles();
+      watchCloudFiles();
     } else {
+      unwatchCloudFiles();
       files = loadJson(STORAGE_KEYS.files, sampleFiles);
       render();
     }
@@ -206,6 +219,7 @@ async function initSupabase() {
 
   if (session) {
     await loadCloudFiles();
+    watchCloudFiles();
   }
 
   if (Capacitor.isNativePlatform()) {
@@ -230,10 +244,12 @@ async function initSupabase() {
   }
 
   // Electron: the background worker names deferred files (including phone
-  // uploads); refresh the list when it renames any so the new names appear.
+  // uploads). The live channel already carries those renames as UPDATEs, so this
+  // only refetches when the channel isn't up -- otherwise every worker pass
+  // would spin the list a second time for a change already applied in place.
   if (window.syncdrop?.onFilesRenamed) {
     window.syncdrop.onFilesRenamed(() => {
-      loadCloudFiles();
+      if (!filesLive) loadCloudFiles();
     });
   }
 }
@@ -337,6 +353,81 @@ async function loadCloudFiles() {
   setStatus("Synced", `${files.length} cloud file${files.length === 1 ? "" : "s"} loaded.`, 100);
 }
 
+// The file list is only ever a snapshot taken by loadCloudFiles(), so a file
+// uploaded from the phone sat in the database unseen: nothing here refetches
+// until you upload, delete, hit Refresh, or reopen the app -- which is why phone
+// uploads only ever turned up at startup. Subscribing to the row changes lets an
+// upload appear as it lands and its name appear when the desktop worker writes
+// it (~15s later), instead of tying the list to either event.
+//
+// Needs migration 0003, which puts files in the supabase_realtime publication.
+// Without it this still reports SUBSCRIBED and simply never fires -- see
+// filesLive, which is why the fallback keys off a delivered event rather than
+// the subscribe status.
+function watchCloudFiles() {
+  if (!supabase || !session || filesChannel) return;
+
+  filesChannel = supabase
+    .channel("files-changes")
+    .on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "files",
+        // RLS already scopes the stream to our own rows; this keeps rows we
+        // would not be shown off the socket in the first place.
+        filter: `user_id=eq.${session.user.id}`
+      },
+      applyRemoteChange
+    )
+    .subscribe();
+}
+
+function unwatchCloudFiles() {
+  if (!filesChannel) return;
+  supabase.removeChannel(filesChannel);
+  filesChannel = null;
+  filesLive = false;
+}
+
+// Apply one streamed row change in place. Patching local state rather than
+// refetching keeps the update instant and quiet: no spinner, no disabled
+// buttons, and rows the user is looking at stay where they are.
+function applyRemoteChange({ eventType, new: row, old }) {
+  filesLive = true;
+
+  if (eventType === "INSERT") {
+    if (localUploadIds.delete(row.id)) return;
+    // A refetch may have raced the socket and already listed the row.
+    if (files.some((file) => file.id === row.id)) return;
+    // loadCloudFiles() orders newest first, and an insert is the newest row.
+    files = [{ ...row, status: "synced", progress: 100 }, ...files];
+    setStatus("New file", `${row.filename_ai} arrived from ${row.uploaded_from}.`, 100);
+  } else if (eventType === "UPDATE") {
+    const current = files.find((file) => file.id === row.id);
+    if (!current) return;
+    files = files.map((file) =>
+      file.id === row.id ? { ...file, ...row, status: "synced", progress: 100 } : file
+    );
+    // The worker clears rename_requested to claim a file before it names it, so
+    // most updates carry no new name and are not worth reporting.
+    if (current.filename_ai !== row.filename_ai) {
+      setStatus("Renamed", `${current.filename_ai} is now ${row.filename_ai}.`, 100);
+    } else {
+      render();
+    }
+  } else if (eventType === "DELETE") {
+    if (!files.some((file) => file.id === old.id)) return;
+    files = files.filter((file) => file.id !== old.id);
+    setStatus("File removed", "A file was deleted from another device.", 100);
+  } else {
+    return;
+  }
+
+  cacheCloudFiles(files);
+}
+
 async function queueFiles(fileList, autoRename = renameNextUpload) {
   const selectedFiles = [...fileList];
   if (selectedFiles.length === 0) return;
@@ -413,6 +504,9 @@ async function uploadCloudFiles(selectedFiles, autoRename = settings.autoRename)
 
     let insert;
     try {
+      // Claim the row before it exists, so the INSERT coming back on the live
+      // channel is recognised as ours rather than reported as a new arrival.
+      localUploadIds.add(id);
       insert = await withRetry(
         async () => {
           const response = await supabase.from("files").insert({
