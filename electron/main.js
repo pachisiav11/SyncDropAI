@@ -5,7 +5,13 @@ import http from "node:http";
 import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { clearSession, writeSession } from "../src/core/session-store.js";
+import {
+  clearSession,
+  readAuthItem,
+  removeAuthItem,
+  writeAuthItem,
+  writeSession
+} from "../src/core/session-store.js";
 import { getClient } from "../cli/lib/client.js";
 import { processPendingRenames } from "../cli/lib/worker.js";
 
@@ -227,6 +233,19 @@ app.whenReady().then(() => {
   ipcMain.handle("syncdrop:clear-session", async () => {
     clearSession();
     return { cleared: true };
+  });
+
+  // Disk-backed storage for supabase-js. The renderer runs on a file:// origin
+  // in the packaged app, where localStorage is never flushed to disk, so the
+  // library persists through here instead and sign-ins survive a restart.
+  ipcMain.handle("syncdrop:auth-storage-get", async (_event, key) => readAuthItem(String(key)));
+
+  ipcMain.handle("syncdrop:auth-storage-set", async (_event, { key, value }) => {
+    writeAuthItem(String(key), value);
+  });
+
+  ipcMain.handle("syncdrop:auth-storage-remove", async (_event, key) => {
+    removeAuthItem(String(key));
   });
 
   ipcMain.handle("syncdrop:save-url", async (event, payload) => {

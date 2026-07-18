@@ -16,9 +16,25 @@ import path from "node:path";
 
 export const CONFIG_DIR = path.join(os.homedir(), ".syncdrop");
 export const SESSION_FILE = path.join(CONFIG_DIR, "session.json");
+// Backing store for supabase-js's own persistence. The packaged app loads over
+// file://, where Chromium hands out a localStorage that never flushes to disk —
+// so the library's default storage silently loses the session on every quit.
+// This file replaces it (see the authStorage bridge in electron/preload.cjs).
+export const AUTH_STORE_FILE = path.join(CONFIG_DIR, "auth-store.json");
 
 export function sessionFilePath() {
   return SESSION_FILE;
+}
+
+// Both files carry auth tokens, so they get identical owner-only treatment.
+function writeSecretFile(file, contents) {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.writeFileSync(file, contents, { mode: 0o600 });
+  try {
+    fs.chmodSync(file, 0o600);
+  } catch {
+    // chmod is a no-op / unsupported on some Windows setups — ignore.
+  }
 }
 
 export function readSession() {
@@ -32,16 +48,9 @@ export function readSession() {
 }
 
 export function writeSession(data) {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  const payload = JSON.stringify({ ...data, updated_at: new Date().toISOString() }, null, 2);
   // Best-effort: written to the user's home dir; readable only by them on most
   // platforms. On POSIX, tighten to 0600 since it carries auth tokens.
-  fs.writeFileSync(SESSION_FILE, payload, { mode: 0o600 });
-  try {
-    fs.chmodSync(SESSION_FILE, 0o600);
-  } catch {
-    // chmod is a no-op / unsupported on some Windows setups — ignore.
-  }
+  writeSecretFile(SESSION_FILE, JSON.stringify({ ...data, updated_at: new Date().toISOString() }, null, 2));
 }
 
 export function clearSession() {
@@ -50,4 +59,35 @@ export function clearSession() {
   } catch {
     // Nothing to remove.
   }
+}
+
+// --- supabase-js storage adapter backing ---
+// A flat key/value map; supabase-js owns the keys (sb-<ref>-auth-token) and the
+// value shape, so we never parse the values — just persist the strings.
+
+function readAuthStore() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(AUTH_STORE_FILE, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function readAuthItem(key) {
+  const value = readAuthStore()[key];
+  return typeof value === "string" ? value : null;
+}
+
+export function writeAuthItem(key, value) {
+  const store = readAuthStore();
+  store[key] = String(value);
+  writeSecretFile(AUTH_STORE_FILE, JSON.stringify(store, null, 2));
+}
+
+export function removeAuthItem(key) {
+  const store = readAuthStore();
+  if (!(key in store)) return;
+  delete store[key];
+  writeSecretFile(AUTH_STORE_FILE, JSON.stringify(store, null, 2));
 }

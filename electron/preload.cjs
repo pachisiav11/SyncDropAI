@@ -12,6 +12,14 @@ contextBridge.exposeInMainWorld("syncdrop", {
   // syncdrop CLI can reuse it. Pass null/empty to clear it on sign-out.
   persistSession: (session) => ipcRenderer.invoke("syncdrop:persist-session", session),
   clearSession: () => ipcRenderer.invoke("syncdrop:clear-session"),
+  // Storage adapter handed to supabase-js in src/supabaseClient.js. Backs its
+  // session on disk (~/.syncdrop/auth-store.json) because localStorage does not
+  // persist on the file:// origin the packaged app loads from.
+  authStorage: {
+    getItem: (key) => ipcRenderer.invoke("syncdrop:auth-storage-get", key),
+    setItem: (key, value) => ipcRenderer.invoke("syncdrop:auth-storage-set", { key, value }),
+    removeItem: (key) => ipcRenderer.invoke("syncdrop:auth-storage-remove", key)
+  },
   // Subscribe to auth tokens captured from the email sign-in redirect.
   onAuthTokens: (callback) => {
     const handler = (_event, tokens) => callback(tokens);

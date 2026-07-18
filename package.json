@@ -28,7 +28,6 @@
   "author": "pachisiav11",
   "license": "MIT",
   "dependencies": {
-    "@capacitor/android": "^7.4.3",
     "@capacitor/app": "^7.1.2",
     "@capacitor/core": "^7.4.3",
     "@supabase/supabase-js": "^2.50.2",
@@ -37,6 +36,7 @@
     "pdfjs-dist": "^6.1.200"
   },
   "devDependencies": {
+    "@capacitor/android": "^7.4.3",
     "@capacitor/cli": "^7.4.3",
     "concurrently": "^9.2.0",
     "electron": "^37.2.0",
