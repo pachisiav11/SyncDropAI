@@ -1,8 +1,8 @@
 {
   "name": "syncdrop-ai",
-  "version": "0.1.0",
-  "description": "Cross-platform cloud file transfer app with AI-generated filenames.",
-  "main": "electron/main.js",
+  "version": "2.0.0",
+  "description": "Send files straight between your own devices over WebRTC, with an end-to-end-encrypted relay when the other device is asleep.",
+  "main": "app/main.js",
   "type": "module",
   "bin": {
     "syncdrop": "cli/index.js"
@@ -10,22 +10,23 @@
   "scripts": {
     "syncdrop": "node cli/index.js",
     "dev": "vite --host 0.0.0.0",
-    "electron": "concurrently -k \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "vite build",
-    "build:electron": "npm run build",
-    "dist": "electron-builder",
     "cap:add:android": "cap add android",
     "cap:sync": "cap sync",
     "cap:open:android": "cap open android",
     "test": "node --test \"test/*.test.js\"",
-    "serve": "node server/node.js"
+    "serve": "node server/node.js",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "keywords": [
-    "electron",
+    "tauri",
     "capacitor",
-    "supabase",
+    "webrtc",
     "file-transfer",
-    "anthropic"
+    "p2p",
+    "end-to-end-encryption"
   ],
   "author": "pachisiav11",
   "license": "MIT",
@@ -41,32 +42,9 @@
   "devDependencies": {
     "@capacitor/android": "^7.4.3",
     "@capacitor/cli": "^7.4.3",
+    "@tauri-apps/cli": "^2.11.4",
     "concurrently": "^9.2.0",
-    "electron": "^37.2.0",
-    "electron-builder": "^26.0.12",
     "vite": "^7.0.0",
     "wait-on": "^8.0.3"
-  },
-  "build": {
-    "appId": "com.syncdrop.ai",
-    "productName": "SyncDrop AI",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "dist-app/**/*",
-      "electron/**/*",
-      "src/core/**/*",
-      "cli/**/*",
-      "package.json"
-    ],
-    "win": {
-      "target": "nsis",
-      "icon": "build/icon.ico"
-    },
-    "nsis": {
-      "installerIcon": "build/icon.ico",
-      "uninstallerIcon": "build/icon.ico"
-    }
   }
 }
