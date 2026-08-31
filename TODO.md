@@ -16,4 +16,4 @@ the sender needs to be awake.
 - [x] 2026-08-31 10:00: Phase 8 — Tauri desktop shell (DPAPI vault, native saves, AI naming on send)
 - [x] 2026-08-31 10:00: Phase 9 — CLI rewrite on the new protocol
 - [x] 2026-08-31 10:00: Phase 10 — Cloudflare Worker + R2 + Durable Objects production server
-- [ ] 2026-08-31 10:00: Phase 11 — docs, browser end-to-end verification, final push
+- [x] 2026-08-31 10:00: Phase 11 — docs, browser end-to-end verification, final push

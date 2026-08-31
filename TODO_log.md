@@ -8,3 +8,4 @@
 - Added: 2026-08-31 10:00 | Completed: 2026-08-31 16:05 | Phase 8 — Tauri desktop shell (DPAPI vault, native saves, AI naming on send)
 - Added: 2026-08-31 10:00 | Completed: 2026-08-31 16:05 | Phase 9 — CLI rewrite on the new protocol
 - Added: 2026-08-31 10:00 | Completed: 2026-08-31 17:20 | Phase 10 — Cloudflare Worker + R2 + Durable Objects production server
+- Added: 2026-08-31 10:00 | Completed: 2026-08-31 17:55 | Phase 11 — docs, browser end-to-end verification, final push
