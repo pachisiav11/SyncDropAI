@@ -26,6 +26,10 @@ export class Hub {
     return (this.connections.get(deviceId)?.size ?? 0) > 0;
   }
 
+  describe() {
+    return { host: "node", devices: this.connections.size };
+  }
+
   connect({ send, close = () => {} }) {
     const hub = this;
     const connection = {
@@ -200,6 +204,9 @@ function fail(status, message) {
   return json(status, { error: message });
 }
 
+// `hub` needs three methods and may answer any of them asynchronously, because
+// on Cloudflare each of them is a hop to another Durable Object rather than a
+// map lookup: isOnline(deviceId), notifyMail(deviceId, count), describe().
 export function createApi({ store, hub, log = () => {} }) {
   const resolveDevice = async (deviceId) => {
     const record = await store.devices.get(deviceId);
@@ -228,7 +235,7 @@ export function createApi({ store, hub, log = () => {} }) {
     if (method === "OPTIONS") return { status: 204, headers: CORS_HEADERS, body: null };
 
     if (method === "GET" && path === "/api/health") {
-      return json(200, { ok: true, store: store.kind, devices: hub.connections.size });
+      return json(200, { ok: true, store: store.kind, ...(await hub.describe()) });
     }
 
     // --- data plane: capability tokens, no signature ------------------------
@@ -336,9 +343,9 @@ export function createApi({ store, hub, log = () => {} }) {
         // beside it on the entry instead.
         const entry = await store.mailbox.push(body.to, body.envelope, caller.deviceId);
         const count = await store.mailbox.count(body.to);
-        hub.notifyMail(body.to, count);
+        await hub.notifyMail(body.to, count);
         log("mail queued for", body.to);
-        return json(201, { id: entry.id, queued: true, online: hub.isOnline(body.to) });
+        return json(201, { id: entry.id, queued: true, online: await hub.isOnline(body.to) });
       }
 
       if (method === "GET" && path === "/api/mailbox") {

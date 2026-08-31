@@ -17,10 +17,15 @@ import { createTransferSession } from "./transfer.js";
 import { collectMailbox, sendViaRelay } from "./relay.js";
 import * as pairing from "./pairing.js";
 
-function websocketUrl(serverUrl) {
+// The `d` parameter is a routing hint, not a claim of identity. A single-process
+// host ignores it; the Cloudflare host uses it to pick which Durable Object owns
+// the socket, then refuses the connection if the handshake that follows proves a
+// different device. Nothing is trusted before that signature is checked.
+function websocketUrl(serverUrl, deviceId) {
   const url = new URL(serverUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = url.pathname.replace(/\/+$/, "") + "/ws";
+  url.searchParams.set("d", deviceId);
   return url.toString();
 }
 
@@ -48,7 +53,7 @@ export function createSyncDrop({
   };
 
   const signaling = createSignalingClient({
-    url: websocketUrl(serverUrl),
+    url: websocketUrl(serverUrl, identity.deviceId),
     identity,
     onStatus: (status, detail) => emit({ type: "status", status, detail }),
     onPeer: (deviceId, isOnline) => {

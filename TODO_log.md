@@ -7,3 +7,4 @@
 - Added: 2026-08-31 10:00 | Completed: 2026-08-31 14:30 | Phase 7 — app UI + PWA: pairing dialog, device list, drop zone, activity with route badges, OPFS streaming sink, service worker, Android share target
 - Added: 2026-08-31 10:00 | Completed: 2026-08-31 16:05 | Phase 8 — Tauri desktop shell (DPAPI vault, native saves, AI naming on send)
 - Added: 2026-08-31 10:00 | Completed: 2026-08-31 16:05 | Phase 9 — CLI rewrite on the new protocol
+- Added: 2026-08-31 10:00 | Completed: 2026-08-31 17:20 | Phase 10 — Cloudflare Worker + R2 + Durable Objects production server

@@ -1,0 +1,52 @@
+# Cloudflare deployment for the SyncDrop rendezvous + relay.
+#
+# One deploy puts the PWA and the relay on the same origin, which is what makes
+# the app installable and lets it talk to the relay with no CORS preflight.
+#
+# First time:
+#   npx wrangler r2 bucket create syncdrop-blobs
+#   npm run build
+#   npx wrangler deploy
+#
+# There is nothing else to provision. No database, no auth provider, no secrets:
+# devices authenticate by signing with keys they generated themselves, so there
+# is no credential on this side to configure, rotate, or leak.
+
+name = "syncdrop"
+main = "server/worker/index.js"
+compatibility_date = "2025-04-01"
+
+[assets]
+directory = "dist-app"
+binding = "ASSETS"
+# The app is a SPA; anything that is not a built file is the app shell.
+not_found_handling = "single-page-application"
+
+# Ciphertext parked for a sleeping recipient. Objects here are AES-GCM sealed to
+# a key the sender derived for one device, so the bucket holds no readable file
+# and no filename — only numbered parts.
+[[r2_buckets]]
+binding = "BLOBS"
+bucket_name = "syncdrop-blobs"
+
+# One object per device: its sockets, its mailbox, and the peers watching it.
+[[durable_objects.bindings]]
+name = "DEVICE"
+class_name = "DeviceObject"
+
+# One object per pairing code, alive for ten minutes.
+[[durable_objects.bindings]]
+name = "PAIR_ROOM"
+class_name = "PairRoomObject"
+
+# One object per queued blob, holding the part tally and its own expiry alarm.
+[[durable_objects.bindings]]
+name = "BLOB"
+class_name = "BlobObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DeviceObject", "PairRoomObject", "BlobObject"]
+
+[observability]
+enabled = true
