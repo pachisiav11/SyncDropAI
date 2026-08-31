@@ -129,9 +129,9 @@ test("client: pairing, presence, relay fallback", async (t) => {
     assert.deepEqual(await phone.api.listMail(), [], "the envelope is acked once written");
   });
 
-  await t.test("a direct attempt with no WebRTC falls back to the relay", async () => {
-    // Node has no RTCPeerConnection, which is exactly the shape of a device
-    // that cannot make a direct connection right now.
+  await t.test("a runtime with no WebRTC goes straight to the relay", async () => {
+    // Node has no RTCPeerConnection. There is no direct path to attempt, so the
+    // send should not report a fallback from an attempt that never happened.
     assert.equal(globalThis.RTCPeerConnection, undefined);
     const fallbacks = [];
     const listener = createSyncDrop({
@@ -145,12 +145,55 @@ test("client: pairing, presence, relay fallback", async (t) => {
     const bytes = randomBytes(4096);
     const result = await listener.send(phone.identity.deviceId, bytesSource({ name: "auto.bin", bytes }));
     assert.equal(result.via, "relay");
-    assert.equal(fallbacks.length, 1);
-    assert.match(fallbacks[0].reason, /WebRTC/i);
+    assert.deepEqual(fallbacks, []);
+    await assert.rejects(
+      () => listener.send(phone.identity.deviceId, bytesSource({ name: "x.bin", bytes }), { prefer: "p2p" }),
+      /no WebRTC/i
+    );
 
     const event = await waitFor(phoneInbox, (e) => e.name === "auto.bin");
     assert.equal(event.via, "relay");
     listener.stop();
+  });
+
+  await t.test("a direct connection that fails falls back to the relay", async () => {
+    // Stand in a WebRTC implementation that always fails to connect, which is
+    // what a symmetric NAT with no reachable TURN looks like from here.
+    class DeadPeerConnection {
+      constructor() {
+        this.connectionState = "new";
+      }
+      createDataChannel() {
+        return { close() {} };
+      }
+      createOffer() {
+        throw new Error("ICE gathering failed");
+      }
+      close() {}
+    }
+    globalThis.RTCPeerConnection = DeadPeerConnection;
+
+    const fallbacks = [];
+    const listener = createSyncDrop({
+      vault: pc.vault,
+      serverUrl,
+      createSink: memorySink(),
+      onEvent: (event) => event.type === "fallback" && fallbacks.push(event)
+    });
+    await listener.start();
+
+    try {
+      const bytes = randomBytes(2048);
+      const result = await listener.send(phone.identity.deviceId, bytesSource({ name: "deadrtc.bin", bytes }));
+      assert.equal(result.via, "relay");
+      assert.equal(fallbacks.length, 1);
+      assert.match(fallbacks[0].reason, /ICE gathering failed/);
+      const event = await waitFor(phoneInbox, (e) => e.name === "deadrtc.bin");
+      assert.equal(event.via, "relay");
+    } finally {
+      listener.stop();
+      delete globalThis.RTCPeerConnection;
+    }
   });
 
   await t.test("unpairing forgets the device and refuses later sends", async () => {

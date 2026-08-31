@@ -1,7 +1,7 @@
 // Local, zero-cost filename suggestion using a vision model served by Ollama
 // (default: MiniCPM-V 4.6). Node/Electron only — never imported by the browser
 // app, which can't reach a local model. The pure kebab/validation helpers still
-// come from src/core/filenames.js so names match what the rest of the app makes.
+// come from protocol/filenames.js so names match what the rest of the app makes.
 //
 // Design notes learned from benchmarking on CPU-only hardware (Iris Xe):
 //   * `think: false` is MANDATORY. MiniCPM-V 4.6's backbone is a reasoning model
@@ -13,7 +13,7 @@
 //     we downscale to a modest edge before sending.
 
 import { Jimp } from "jimp";
-import { cleanFilename, getExtension, isValidAiFilename } from "../../src/core/filenames.js";
+import { cleanFilename, getExtension, isValidAiFilename } from "../../protocol/filenames.js";
 
 const OLLAMA_HOST = (process.env.OLLAMA_HOST || "http://127.0.0.1:11434").replace(/\/$/, "");
 const MODEL = process.env.SYNCDROP_NAMER_MODEL || "minicpm-v4.6";

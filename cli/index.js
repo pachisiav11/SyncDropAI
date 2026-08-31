@@ -1,247 +1,248 @@
 #!/usr/bin/env node
-// syncdrop CLI — file operations against the same Supabase project the SyncDrop
-// AI desktop/mobile app uses. Auth is app-only: sign in via the desktop app,
-// then this CLI reuses that session (see cli/lib/client.js). One-shot commands
-// only — no sync, watch, or daemon.
+// SyncDrop CLI.
+//
+// This is a device in its own right, with its own keypair, paired like any
+// other. It does not borrow the desktop app credentials, and there is nothing
+// here that can expire.
+//
+// Node has no WebRTC, so the CLI always travels by the encrypted relay. Files
+// are sealed to the recipient key before they leave this machine either way.
 
-import fs from "node:fs";
 import path from "node:path";
-import readline from "node:readline/promises";
-import { stdin, stdout } from "node:process";
+import process from "node:process";
 import { Command } from "commander";
 
-import { CliError, getClient } from "./lib/client.js";
-import {
-  deleteFile,
-  getSignedUrl,
-  listFiles,
-  renameFile,
-  resolveFile,
-  uploadFile
-} from "./lib/files.js";
-import { processPendingRenames } from "./lib/worker.js";
-import { formatBytes, formatDate, parseSince, renderTable } from "./lib/util.js";
+import { createSyncDrop } from "../protocol/client.js";
+import { openVault } from "../protocol/vault.js";
+import { formatDeviceId } from "../protocol/identity.js";
+import { formatBytes } from "../protocol/util.js";
+import { directorySink, fileSource } from "./lib/nodeio.js";
+import { fileStorage, readConfig, serverUrl, writeConfig } from "./lib/storage.js";
 
-const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+const VERSION = "2.0.0";
+
+function fail(message) {
+  console.error(message);
+  process.exitCode = 1;
+}
+
+function defaultName() {
+  const machine = process.env.COMPUTERNAME || process.env.HOSTNAME || "Terminal";
+  return readConfig().name || machine + " (CLI)";
+}
+
+async function connectClient({ quiet = true, downloadDir } = {}) {
+  const vault = await openVault(fileStorage(), { name: defaultName(), platform: "cli" });
+
+  const client = createSyncDrop({
+    vault,
+    serverUrl: serverUrl(),
+    createSink: directorySink(downloadDir ?? readConfig().downloads ?? process.cwd()),
+    onEvent: (event) => {
+      if (quiet) return;
+      if (event.type === "collected") console.log("  received " + event.name + " -> " + event.path);
+      if (event.type === "discarded") console.log("  discarded an envelope: " + event.reason);
+      if (event.type === "failed") console.log("  failed: " + event.error);
+    }
+  });
+
+  await client.start();
+  return { client, vault };
+}
+
+// Accepts a device fingerprint, or any unambiguous part of a device name.
+function resolveDevice(client, needle) {
+  const peers = client.peers();
+  const term = String(needle ?? "").trim().toUpperCase();
+  const byId = peers.find((peer) => peer.deviceId === term.replace(/-/g, ""));
+  if (byId) return byId;
+
+  const matches = peers.filter((peer) => peer.name.toUpperCase().includes(term));
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    throw new Error(needle + " matches " + matches.length + " devices. Use the fingerprint instead.");
+  }
+  throw new Error("No paired device matches " + needle + ". Run: syncdrop devices");
+}
+
+// Naming runs here rather than in the protocol, because it needs Node-only
+// decoders and a model running on this machine.
+async function suggestName(source) {
+  try {
+    const { suggestNameFromContent } = await import("./lib/namer.js");
+    const head = Buffer.from(await source.readChunk(0, Math.min(source.size, 8 * 1024 * 1024)));
+    return await suggestNameFromContent({
+      buffer: head,
+      mimeType: source.mime,
+      originalFilename: source.name
+    });
+  } catch {
+    // No model running, or a format it cannot read: keep the original name.
+    return null;
+  }
+}
 
 const program = new Command();
-
 program
   .name("syncdrop")
-  .description("Manage your SyncDrop AI cloud files from the terminal.")
-  .version(pkg.version, "-v, --version", "print the CLI version")
-  .addHelpText(
-    "after",
-    [
-      "",
-      "Options by command:",
-      "  upload    --no-rename         keep the original filename (skip AI rename)",
-      "  list      [count]             max number of files to show",
-      "            --since <window>    only newer than e.g. 30m, 5h, 28d, 2w",
-      "            --limit <n>         max number of files to show",
-      "            --search <query>    filter by filename substring",
-      "            --json              print raw JSON instead of a table",
-      "  download  --out <path>        destination file or directory",
-      "  delete    -y, --yes           skip the confirmation prompt",
-      "  info      --json              print raw JSON",
-      "  autoname  --limit <n>         max files to name in this pass (default 25)",
-      "",
-      "Run `syncdrop <command> --help` for a single command's options.",
-      "",
-      "Examples:",
-      "  syncdrop upload ./report.pdf",
-      "  syncdrop upload ./raw.png --no-rename",
-      "  syncdrop autoname            name everything awaiting AI rename",
-      "  syncdrop list 5",
-      "  syncdrop list --since 24h --search invoice",
-      "  syncdrop list --json | jq '.[].filename_ai'",
-      "  syncdrop download report.pdf --out ~/Downloads",
-      "  syncdrop info <id> --json",
-      "  syncdrop rename <id> quarterly-report.pdf",
-      "  syncdrop delete report.pdf --yes"
-    ].join("\n")
-  );
-
-// Bare `syncdrop` (no command) prints the full command list.
-program.action(() => program.help());
+  .description("Send files straight between your own devices. No account.")
+  .version(VERSION);
 
 program
-  .command("upload")
-  .argument("<path>", "path to the file to upload")
-  .option("--no-rename", "keep the original filename (skip the AI rename for this upload)")
-  .description("upload a file to your SyncDrop cloud storage")
-  .action(async (filePath, options) => {
-    const { supabase, bucket, userId } = await getClient();
-    const result = await uploadFile({
-      supabase,
-      bucket,
-      userId,
-      filePath: path.resolve(filePath),
-      noRename: options.rename === false
-    });
-    console.log(`Uploaded ${result.filename_original} (${formatBytes(result.size)})`);
-    if (result.rename_requested) {
-      console.log(`Queued for AI naming — run \`syncdrop autoname\` (or open the desktop app) to name it.`);
-    }
-    console.log(`id: ${result.id}`);
+  .command("id")
+  .description("Show this device name and fingerprint")
+  .action(async () => {
+    const { client } = await connectClient();
+    console.log(client.identity.name);
+    console.log("  fingerprint  " + formatDeviceId(client.identity.deviceId));
+    console.log("  server       " + serverUrl());
+    console.log("  paired with  " + client.peers().length + " device(s)");
+    client.stop();
   });
 
 program
-  .command("list")
-  .argument("[count]", "max number of files to show")
-  .option("--since <window>", "only files newer than a window, e.g. 30m, 5h, 28d")
-  .option("--limit <n>", "max number of files to show", (v) => parseInt(v, 10))
-  .option("--search <query>", "filter by filename substring")
-  .option("--json", "print raw JSON instead of a table")
-  .description("list your cloud files")
-  .action(async (count, options) => {
-    const { supabase } = await getClient();
-    const since = options.since ? parseSince(options.since) : null;
-    const limit = options.limit ?? (count != null ? parseInt(count, 10) : null);
-    if (limit != null && Number.isNaN(limit)) throw new CliError(`Invalid count/limit value.`);
-
-    const files = await listFiles({ supabase, since, limit, search: options.search });
-
-    if (options.json) {
-      console.log(JSON.stringify(files, null, 2));
-      return;
+  .command("pair [code]")
+  .description("Pair with another device. With no code, shows one to type there.")
+  .action(async (code) => {
+    const { client } = await connectClient();
+    try {
+      const offer = code ? null : client.createPairingOffer();
+      if (offer) {
+        console.log("\n  Type this on the other device:\n");
+        console.log("      " + offer.display + "\n");
+        console.log("  Waiting... (expires in five minutes)");
+      } else {
+        console.log("Pairing...");
+      }
+      const peer = await client.pair(offer ? offer.code : code);
+      console.log("\nPaired with " + peer.name + "  " + formatDeviceId(peer.deviceId));
+    } catch (error) {
+      fail(error.message);
+    } finally {
+      client.stop();
     }
-
-    const rows = files.map((f) => ({
-      original: f.filename_original,
-      name: f.filename_ai,
-      size: formatBytes(f.size),
-      uploaded: formatDate(f.created_at)
-    }));
-    console.log(
-      renderTable(rows, [
-        ["original", "ORIGINAL"],
-        ["name", "AI NAME"],
-        ["size", "SIZE"],
-        ["uploaded", "UPLOADED"]
-      ])
-    );
   });
 
 program
-  .command("download")
-  .argument("<name|id>", "file name or id to download")
-  .option("--out <path>", "destination file or directory (default: current directory)")
-  .description("download a file to your machine")
-  .action(async (identifier, options) => {
-    const { supabase, bucket } = await getClient();
-    const file = await resolveFile({ supabase, identifier });
-    const url = await getSignedUrl({ supabase, bucket, file });
-
-    let destination = options.out ? path.resolve(options.out) : path.resolve(file.filename_ai);
-    if (fs.existsSync(destination) && fs.statSync(destination).isDirectory()) {
-      destination = path.join(destination, file.filename_ai);
-    }
-
-    const response = await fetch(url);
-    if (!response.ok) throw new CliError(`Download failed with status ${response.status}.`);
-    const buffer = Buffer.from(await response.arrayBuffer());
-    fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.writeFileSync(destination, buffer);
-
-    console.log(`Downloaded ${file.filename_ai} → ${destination} (${formatBytes(buffer.length)})`);
-  });
-
-program
-  .command("delete")
-  .argument("<name|id>", "file name or id to delete")
-  .option("-y, --yes", "skip the confirmation prompt")
-  .description("delete a file from storage and metadata")
-  .action(async (identifier, options) => {
-    const { supabase, bucket } = await getClient();
-    const file = await resolveFile({ supabase, identifier });
-
-    if (!options.yes) {
-      const rl = readline.createInterface({ input: stdin, output: stdout });
-      const answer = await rl.question(`Delete "${file.filename_ai}" (${file.id})? [y/N] `);
-      rl.close();
-      if (!/^y(es)?$/i.test(answer.trim())) {
-        console.log("Cancelled.");
-        return;
+  .command("devices")
+  .description("List paired devices")
+  .action(async () => {
+    const { client } = await connectClient();
+    const peers = client.peers();
+    if (peers.length === 0) {
+      console.log("No paired devices yet. Run: syncdrop pair");
+    } else {
+      for (const peer of peers) {
+        const dot = client.isOnline(peer.deviceId) ? "online " : "offline";
+        console.log("  " + dot + "  " + peer.name.padEnd(24) + " " + formatDeviceId(peer.deviceId));
       }
     }
-
-    await deleteFile({ supabase, bucket, file });
-    console.log(`Deleted ${file.filename_ai}.`);
+    client.stop();
   });
 
 program
-  .command("rename")
-  .argument("<name|id>", "file name or id to rename")
-  .argument("<new-name>", "the new display filename")
-  .description("rename a file's AI filename (no AI re-naming)")
-  .action(async (identifier, newName) => {
-    const { supabase } = await getClient();
-    const file = await resolveFile({ supabase, identifier });
-    const updated = await renameFile({ supabase, file, newName });
-    console.log(`Renamed ${file.filename_ai} → ${updated.filename_ai}`);
+  .command("send <files...>")
+  .description("Send one or more files to a paired device")
+  .requiredOption("-t, --to <device>", "device name or fingerprint")
+  .option("--rename", "name each file from its content using the local model")
+  .action(async (files, options) => {
+    const { client } = await connectClient();
+    try {
+      const peer = resolveDevice(client, options.to);
+      for (const filePath of files) {
+        const source = await fileSource(filePath);
+        try {
+          let sending = source;
+          if (options.rename) {
+            const suggested = await suggestName(source);
+            if (suggested) sending = { ...source, name: suggested };
+          }
+          process.stdout.write("  " + sending.name + " (" + formatBytes(source.size) + ") -> " + peer.name + " ... ");
+          const result = await client.send(peer.deviceId, sending);
+          console.log(result.via === "relay" ? "queued (relay)" : "sent (" + result.via + ")");
+        } finally {
+          await source.close();
+        }
+      }
+    } catch (error) {
+      fail(error.message);
+    } finally {
+      client.stop();
+    }
   });
 
 program
-  .command("autoname")
-  .option("--limit <n>", "max number of files to name in this pass", (v) => parseInt(v, 10))
-  .description("name files awaiting AI rename, using a local vision model via Ollama")
+  .command("receive")
+  .description("Collect anything waiting for this device")
+  .option("-o, --out <dir>", "where to write files (default: current directory)")
+  .option("-w, --watch", "stay running and collect as things arrive")
   .action(async (options) => {
-    const { supabase, bucket } = await getClient();
-    const limit = options.limit ?? 25;
-    if (Number.isNaN(limit)) throw new CliError("Invalid --limit value.");
+    const downloadDir = path.resolve(options.out ?? process.cwd());
+    const { client } = await connectClient({ quiet: false, downloadDir });
+    const collected = await client.collect();
+    console.log("Collected " + collected.length + " file(s) into " + downloadDir);
 
-    const summary = await processPendingRenames({
-      supabase,
-      bucket,
-      limit,
-      onProgress: ({ original, result, name }) => {
-        if (result === "named") console.log(`  named   ${original} → ${name}`);
-        else if (result === "kept") console.log(`  kept    ${original} (couldn't identify content)`);
-        else console.log(`  failed  ${original}: ${name}`);
-      }
-    });
-
-    if (summary.total === 0) {
-      console.log("Nothing to name — no files are awaiting AI rename.");
+    if (!options.watch) {
+      client.stop();
       return;
     }
-    console.log(
-      `\nDone: ${summary.named} named, ${summary.kept} kept, ${summary.failed} failed ` +
-        `(of ${summary.total}).`
-    );
+    console.log("Watching for more. Ctrl+C to stop.");
+    process.on("SIGINT", () => {
+      client.stop();
+      process.exit(0);
+    });
   });
 
 program
-  .command("info")
-  .argument("<name|id>", "file name or id")
-  .option("--json", "print raw JSON")
-  .description("show metadata for a single file")
-  .action(async (identifier, options) => {
-    const { supabase } = await getClient();
-    const file = await resolveFile({ supabase, identifier });
-
-    if (options.json) {
-      console.log(JSON.stringify(file, null, 2));
-      return;
+  .command("forget <device>")
+  .description("Remove a paired device")
+  .action(async (device) => {
+    const { client } = await connectClient();
+    try {
+      const peer = resolveDevice(client, device);
+      await client.unpair(peer.deviceId);
+      console.log("Forgot " + peer.name);
+    } catch (error) {
+      fail(error.message);
+    } finally {
+      client.stop();
     }
-
-    const lines = [
-      ["Name", file.filename_ai],
-      ["Original", file.filename_original],
-      ["Size", `${formatBytes(file.size)} (${file.size} bytes)`],
-      ["Type", file.mime_type ?? "—"],
-      ["Uploaded from", file.uploaded_from],
-      ["Uploaded at", formatDate(file.created_at)],
-      ["Storage path", file.storage_path],
-      ["ID", file.id]
-    ];
-    const width = Math.max(...lines.map(([label]) => label.length));
-    console.log(lines.map(([label, value]) => `${label.padEnd(width)}  ${value}`).join("\n"));
   });
 
-program.parseAsync(process.argv).catch((error) => {
-  const message = error instanceof CliError ? error.message : error?.message ?? String(error);
-  console.error(`\nError: ${message}`);
-  process.exitCode = 1;
-});
+program
+  .command("config [key] [value]")
+  .description("Read or set config: server, name, downloads")
+  .action(async (key, value) => {
+    if (!key) {
+      console.log(JSON.stringify({ server: serverUrl(), ...readConfig() }, null, 2));
+      return;
+    }
+    if (!["server", "name", "downloads"].includes(key)) {
+      return fail("Unknown setting " + key + ". Try: server, name, downloads");
+    }
+    if (value === undefined) {
+      console.log(readConfig()[key] ?? (key === "server" ? serverUrl() : ""));
+      return;
+    }
+    writeConfig({ [key]: value });
+    if (key === "name") {
+      const vault = await openVault(fileStorage(), { name: value, platform: "cli" });
+      await vault.rename(value);
+    }
+    console.log(key + " = " + value);
+  });
+
+program
+  .command("serve")
+  .description("Run a rendezvous and relay server on this machine")
+  .option("-p, --port <port>", "port to listen on", "8787")
+  .option("-d, --data <dir>", "where to keep queued ciphertext")
+  .action(async (options) => {
+    const { startServer } = await import("../server/node.js");
+    await startServer({
+      port: Number(options.port),
+      dataDir: options.data ?? path.join(process.cwd(), ".syncdrop-data")
+    });
+  });
+
+program.parseAsync(process.argv).catch((error) => fail(error.message));

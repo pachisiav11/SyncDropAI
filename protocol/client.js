@@ -298,7 +298,11 @@ export function createSyncDrop({
       const peer = vault.get(deviceId);
       if (!peer) throw new Error("That device is not paired with this one");
 
-      const tryDirect = prefer !== "relay" && online.has(deviceId);
+      // A runtime with no WebRTC at all (the CLI, a server-side script) has no
+      // direct path to attempt, so go straight to the relay rather than
+      // reporting a fallback from an attempt that never happened.
+      const canDirect = Boolean(globalThis.RTCPeerConnection);
+      const tryDirect = prefer !== "relay" && canDirect && online.has(deviceId);
       if (tryDirect) {
         try {
           const entry = await connect(deviceId);
@@ -311,7 +315,13 @@ export function createSyncDrop({
         }
       }
 
-      if (prefer === "p2p") throw new Error("That device is not reachable directly right now");
+      if (prefer === "p2p") {
+        throw new Error(
+          canDirect
+            ? "That device is not reachable directly right now"
+            : "This runtime has no WebRTC, so there is no direct path to use"
+        );
+      }
 
       const queued = await sendViaRelay({
         api,
