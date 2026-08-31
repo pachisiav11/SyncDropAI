@@ -53,9 +53,9 @@ export function createMemoryStore() {
       }
     },
     mailbox: {
-      async push(to, envelope) {
+      async push(to, envelope, from = null) {
         const id = shortId(16);
-        const entry = { id, to, envelope, createdAt: Date.now() };
+        const entry = { id, to, from, envelope, createdAt: Date.now() };
         if (!mailboxes.has(to)) mailboxes.set(to, new Map());
         mailboxes.get(to).set(id, entry);
         return entry;
@@ -183,9 +183,9 @@ export async function createDiskStore(directory) {
       }
     },
     mailbox: {
-      async push(to, envelope) {
+      async push(to, envelope, from = null) {
         const id = shortId(16);
-        const entry = { id, to, envelope, createdAt: Date.now() };
+        const entry = { id, to, from, envelope, createdAt: Date.now() };
         await fs.mkdir(mailDir(to), { recursive: true });
         await writeJson(mailFile(to, id), entry);
         return entry;

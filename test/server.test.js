@@ -201,7 +201,7 @@ test("server: rendezvous, pairing, signalling, mailbox and blobs", async (t) => 
 
     const entries = await phoneApi.listMail();
     assert.equal(entries.length, 1);
-    assert.equal(entries[0].envelope.from, pc.deviceId);
+    assert.equal(entries[0].from, pc.deviceId);
     assert.equal(entries[0].envelope.blobId, blob.blobId);
 
     await phoneApi.ackMail(entries[0].id);

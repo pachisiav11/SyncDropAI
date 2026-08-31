@@ -331,7 +331,10 @@ export function createApi({ store, hub, log = () => {} }) {
       if (method === "POST" && path === "/api/mailbox") {
         const body = readJsonBody(request);
         if (typeof body.to !== "string" || !body.envelope) return fail(400, "Need a recipient and an envelope");
-        const entry = await store.mailbox.push(body.to, { ...body.envelope, from: caller.deviceId });
+        // The envelope is the sender's signed artifact. Stamping anything into
+        // it here would invalidate that signature, so the routing hint goes
+        // beside it on the entry instead.
+        const entry = await store.mailbox.push(body.to, body.envelope, caller.deviceId);
         const count = await store.mailbox.count(body.to);
         hub.notifyMail(body.to, count);
         log("mail queued for", body.to);
