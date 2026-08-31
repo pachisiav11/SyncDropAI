@@ -14,3 +14,4 @@ builds/
 supabase/.credentials.local
 supabase/.temp/
 .syncdrop-data/
+scripts/pairdebug.mjs

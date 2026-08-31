@@ -3,3 +3,4 @@
 - Added: 2026-08-31 10:00 | Completed: 2026-08-31 11:55 | Phase 3 — transport-agnostic transfer engine: offer/accept/chunk/verify state machine, chunked digest, backpressure, cancel, resume hook, 13 tests
 - Added: 2026-08-31 10:00 | Completed: 2026-08-31 12:20 | Phase 4 — WebRTC transport with identity-bound SDP and candidate-pair route reporting
 - Added: 2026-08-31 10:00 | Completed: 2026-08-31 12:35 | Phase 5 — end-to-end-encrypted store-and-forward relay, 11 tests
+- Added: 2026-08-31 10:00 | Completed: 2026-08-31 13:10 | Phase 6 — transport orchestrator: vault, symmetric pairing, presence, P2P-first send with relay fallback, auto-collect, 10 tests
