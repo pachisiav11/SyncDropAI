@@ -1,0 +1,1 @@
+- Added: 2026-08-31 10:00 | Completed: 2026-08-31 10:40 | Phase 1 — protocol core: WebCrypto primitives, device identity, code-authenticated pairing, data-channel wire format, 17 tests
