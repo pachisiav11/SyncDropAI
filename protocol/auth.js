@@ -13,7 +13,7 @@
 // nothing.
 
 import { CONTEXT } from "./constants.js";
-import { importPeer, signContext, verifyContext } from "./identity.js";
+import { importPeer, publicRecord, signContext, verifyContext } from "./identity.js";
 import { b64u, randomBytes } from "./util.js";
 
 export const AUTH_SCHEME = "SyncDrop";
@@ -27,7 +27,6 @@ export function createChallenge() {
 }
 
 export async function buildHandshake(identity, nonce) {
-  const { publicRecord } = await import("./identity.js");
   const record = publicRecord(identity);
   return {
     type: "auth",

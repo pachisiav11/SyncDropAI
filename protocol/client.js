@@ -123,7 +123,9 @@ export function createSyncDrop({
         createSink: (info) => createSink({ ...info, from: peer.deviceId, via: "p2p" }),
         onEvent: (event) => emit({ ...event, deviceId: peer.deviceId, via: "p2p" })
       });
-      entry.route = await transport.route().catch(() => null);
+      // start() resolves to the channel adapter, which is what knows the
+      // selected candidate pair.
+      entry.route = await channel.route().catch(() => null);
       emit({ type: "connected", deviceId: peer.deviceId, route: entry.route });
       return entry;
     });
@@ -161,7 +163,7 @@ export function createSyncDrop({
   // it run the identical exchange. Both send a signed hello, both compute the
   // confirmation tag over the ordered transcript, and both refuse to store the
   // peer until the tags agree.
-  async function runPairing(code, { timeoutMs = PAIR_TTL_MS } = {}) {
+  async function runPairing(code, { timeoutMs = PAIR_TTL_MS, signal } = {}) {
     const normalized = pairing.parsePairingInput(code);
     const { roomId, pairKey } = await pairing.derivePairing(normalized);
     const myHello = await pairing.buildHello(identity);
@@ -187,6 +189,13 @@ export function createSyncDrop({
         () => finish(new Error("Pairing timed out. Generate a fresh code and try again.")),
         timeoutMs
       );
+
+      // Abandoning an attempt has to leave the room as well as stop listening,
+      // or the next device to use that code finds it already occupied.
+      if (signal) {
+        if (signal.aborted) return finish(new Error("Pairing cancelled"));
+        signal.addEventListener("abort", () => finish(new Error("Pairing cancelled")), { once: true });
+      }
 
       const tryConfirm = async () => {
         if (!theirHello || theirTag === null) return;

@@ -2,10 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "syncdrop-dev",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "port": 5173
+      "name": "syncdrop",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server/node.js"],
+      "port": 8787
     }
   ]
 }

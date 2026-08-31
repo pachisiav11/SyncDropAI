@@ -221,7 +221,10 @@ export async function collectMailbox({
       // simply collected again on the next pass.
       await api.ackMail(entry.id);
       results.push(received);
-      onEvent({ type: "collected", id: entry.id, from: peer.deviceId, ...received.info, path: received.path });
+      // info carries its own id (the blob id); the mailbox entry id is what
+      // the progress events used, so it has to win or the UI shows two rows
+      // for one transfer.
+      onEvent({ type: "collected", ...received.info, id: entry.id, from: peer.deviceId, path: received.path });
     } catch (error) {
       onEvent({ type: "failed", id: entry.id, from: peer.deviceId, error: error.message });
     }

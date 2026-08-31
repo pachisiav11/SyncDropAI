@@ -11,7 +11,7 @@
 // a peer on 192.168.x.x is not blocked as mixed content. That is what lets the
 // phone stay a normal web app while still transferring at LAN speed.
 
-import { CONTEXT } from "./constants.js";
+import { CONTEXT, P2P_BUFFER_LOW } from "./constants.js";
 import { signContext, verifyContext } from "./identity.js";
 
 export const DEFAULT_ICE_SERVERS = [
@@ -128,6 +128,18 @@ export function createRtcTransport({
     onMessage(handler) {
       handlers.push(handler);
     },
+    // Lets the transfer engine wait on the transport instead of polling it.
+    whenDrained() {
+      if (!channel || channel.bufferedAmount <= P2P_BUFFER_LOW) return Promise.resolve();
+      return new Promise((resolve) => {
+        channel.bufferedAmountLowThreshold = P2P_BUFFER_LOW;
+        const onLow = () => {
+          channel.removeEventListener("bufferedamountlow", onLow);
+          resolve();
+        };
+        channel.addEventListener("bufferedamountlow", onLow);
+      });
+    },
     close() {
       clearTimeout(timer);
       try {
@@ -187,5 +199,5 @@ export function createRtcTransport({
     return ready;
   }
 
-  return { adapter, ready, start, handleSignal, close: adapter.close };
+  return { adapter, ready, start, handleSignal, route: () => adapter.route(), close: adapter.close };
 }

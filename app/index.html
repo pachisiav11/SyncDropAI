@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f172a" />
+    <title>SyncDrop</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark" aria-hidden="true"></span>
+        <span>SyncDrop</span>
+      </div>
+      <div class="topbar-right">
+        <button id="settings-button" class="ghost" type="button">This device</button>
+        <span id="link-status" class="status" data-state="connecting">
+          <span class="dot" aria-hidden="true"></span>
+          <span class="status-text">Connecting</span>
+        </span>
+      </div>
+    </header>
+
+    <main class="shell">
+      <section class="panel" aria-labelledby="devices-heading">
+        <div class="panel-head">
+          <h2 id="devices-heading">Devices</h2>
+          <button id="pair-button" class="primary" type="button">Pair a device</button>
+        </div>
+        <div id="devices"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="send-heading">
+        <div class="panel-head">
+          <h2 id="send-heading">Send</h2>
+          <label class="check">
+            <input id="rename-toggle" type="checkbox" />
+            <span>Name files by their content</span>
+          </label>
+        </div>
+        <div id="dropzone" class="dropzone" tabindex="0" role="button">
+          <input id="file-input" type="file" multiple hidden />
+          <strong>Drop files here</strong>
+          <span>or tap to choose. Nothing uploads until you pick a device.</span>
+        </div>
+        <div id="outbox"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="activity-heading">
+        <div class="panel-head">
+          <h2 id="activity-heading">Activity</h2>
+          <button id="clear-activity" class="ghost" type="button">Clear finished</button>
+        </div>
+        <div id="activity"></div>
+      </section>
+    </main>
+
+    <dialog id="pair-dialog" class="sheet">
+      <form method="dialog" class="sheet-body" id="pair-form">
+        <h3>Pair a device</h3>
+        <p class="muted">
+          Both devices must be on this screen. One shows a code, the other types it.
+          The code is what proves the two devices are talking to each other and not
+          to the server in between.
+        </p>
+        <div class="tabs" role="tablist">
+          <button type="button" class="tab active" data-tab="show" role="tab">Show a code</button>
+          <button type="button" class="tab" data-tab="enter" role="tab">Enter a code</button>
+        </div>
+        <div id="pair-show" class="tab-panel">
+          <div id="pair-code" class="code">------------</div>
+          <p class="muted small">Type this on the other device. It expires in five minutes.</p>
+        </div>
+        <div id="pair-enter" class="tab-panel" hidden>
+          <label class="field">
+            <span>Code from the other device</span>
+            <input id="pair-input" inputmode="latin" autocomplete="off" spellcheck="false" placeholder="ABCD-EFGH-JKMN" />
+          </label>
+        </div>
+        <p id="pair-status" class="pair-status" role="status"></p>
+        <div class="sheet-actions">
+          <button type="button" id="pair-cancel" class="ghost">Cancel</button>
+          <button type="button" id="pair-submit" class="primary">Pair</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="settings-dialog" class="sheet">
+      <div class="sheet-body">
+        <h3>This device</h3>
+        <label class="field">
+          <span>Name</span>
+          <input id="device-name" autocomplete="off" />
+        </label>
+        <label class="field">
+          <span>Server</span>
+          <input id="server-url" autocomplete="off" spellcheck="false" />
+          <small class="muted">Rendezvous and relay. Files travel directly whenever both devices are reachable.</small>
+        </label>
+        <div class="field">
+          <span>Device fingerprint</span>
+          <code id="device-id" class="fingerprint"></code>
+          <small class="muted">Generated on this device. It has no password and cannot expire.</small>
+        </div>
+        <div class="sheet-actions">
+          <button type="button" id="settings-close" class="ghost">Close</button>
+          <button type="button" id="settings-save" class="primary">Save</button>
+        </div>
+      </div>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

@@ -73,6 +73,9 @@ export function createTransferSession({
   // dies on memory rather than on bandwidth.
   function drain() {
     if (channel.bufferedAmount < P2P_BUFFER_HIGH) return Promise.resolve();
+    // A real data channel can tell us the moment it has drained; polling adds
+    // up to a tick of dead air to every buffer cycle of a large transfer.
+    if (channel.whenDrained) return channel.whenDrained();
     return new Promise((resolve) => {
       const timer = setInterval(() => {
         if (closed || channel.bufferedAmount <= P2P_BUFFER_LOW) {
