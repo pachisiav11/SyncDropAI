@@ -17,7 +17,8 @@
     "cap:add:android": "cap add android",
     "cap:sync": "cap sync",
     "cap:open:android": "cap open android",
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test \"test/*.test.js\"",
+    "serve": "node server/node.js"
   },
   "keywords": [
     "electron",
@@ -34,7 +35,8 @@
     "@supabase/supabase-js": "^2.50.2",
     "commander": "^12.1.0",
     "jimp": "^1.6.1",
-    "pdfjs-dist": "^6.1.200"
+    "pdfjs-dist": "^6.1.200",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@capacitor/android": "^7.4.3",

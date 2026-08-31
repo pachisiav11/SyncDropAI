@@ -13,3 +13,4 @@ android/local.properties
 builds/
 supabase/.credentials.local
 supabase/.temp/
+.syncdrop-data/
