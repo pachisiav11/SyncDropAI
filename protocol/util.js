@@ -24,9 +24,16 @@ export function fromUtf8(bytes) {
   return decoder.decode(bytes);
 }
 
+// getRandomValues refuses more than 65536 bytes in one call, so fill in slices.
+// Callers ask for large buffers in tests and for nonce material in bulk, and a
+// QuotaExceededError from the crypto layer is a confusing way to learn that.
+const RANDOM_MAX = 65536;
+
 export function randomBytes(length) {
   const out = new Uint8Array(length);
-  globalThis.crypto.getRandomValues(out);
+  for (let offset = 0; offset < length; offset += RANDOM_MAX) {
+    globalThis.crypto.getRandomValues(out.subarray(offset, Math.min(offset + RANDOM_MAX, length)));
+  }
   return out;
 }
 

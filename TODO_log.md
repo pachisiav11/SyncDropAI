@@ -1,2 +1,3 @@
 - Added: 2026-08-31 10:00 | Completed: 2026-08-31 10:40 | Phase 1 — protocol core: WebCrypto primitives, device identity, code-authenticated pairing, data-channel wire format, 17 tests
 - Added: 2026-08-31 10:00 | Completed: 2026-08-31 11:15 | Phase 2 — rendezvous + mailbox + blob server: host-agnostic core, memory/disk stores, Node host, signed HTTP + capability tokens, 13 integration tests
+- Added: 2026-08-31 10:00 | Completed: 2026-08-31 11:55 | Phase 3 — transport-agnostic transfer engine: offer/accept/chunk/verify state machine, chunked digest, backpressure, cancel, resume hook, 13 tests
