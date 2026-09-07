@@ -43,12 +43,9 @@ const TEXT_MIME = new Set([
 const HTML_MIME = new Set(["text/html", "application/xhtml+xml"]);
 
 const IMAGE_PROMPT =
-  "Name this image as a file: reply with a specific 3-6 word description of its " +
-  "content. Include any app, brand, product, or document name you can read. " +
-  "Description only, no punctuation, no extra text.";
+  "Describe what is in this image in 3 to 6 words, as specifically as you can. Include any app, brand, product, or document name you can read. Reply with the description only. No punctuation, no quotes, and never use the words image, photo, picture, screenshot or file.";
 const TEXT_PROMPT =
-  "Below is the beginning of a document. In 3 to 6 words, describe what it is so " +
-  "it can be named as a file. Description only, no extra text.\n\n";
+  "Below is the start of a document. In 3 to 6 words, say specifically what it is. Reply with the description only. No punctuation, no quotes, and never use the words document, text or file.\n\n";
 
 // Ask Ollama to generate, with reasoning disabled and a short output cap.
 async function ollamaDescribe({ prompt, images }) {

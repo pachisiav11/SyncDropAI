@@ -78,6 +78,8 @@ function sanitize(filename) {
 
 // Writes into <dir>/<name>.part and renames on close, so a failed transfer
 // never leaves something that looks like a finished file.
+const WRITE_BATCH = 4 * 1024 * 1024;
+
 export function directorySink(directory) {
   return async (info) => {
     await fsp.mkdir(directory, { recursive: true });
@@ -85,18 +87,40 @@ export function directorySink(directory) {
     const temp = `${target}.part`;
     const handle = await fsp.open(temp, "w");
 
+    // Chunks are gathered before they hit the disk. One write syscall per
+    // 64 KiB chunk is a lot of syscalls for a large file; a chunk that does not
+    // continue the run flushes what is held, so out-of-order delivery is still
+    // written to the right place.
+    let batch = null;
+    let batchStart = 0;
+    let batchUsed = 0;
+
+    const flush = async () => {
+      if (batchUsed === 0) return;
+      await handle.write(batch, 0, batchUsed, batchStart);
+      batchUsed = 0;
+    };
+
     return {
       resumeFrom: 0,
       async write(sequence, bytes) {
-        await handle.write(bytes, 0, bytes.length, sequence * info.chunkSize);
+        const position = sequence * info.chunkSize;
+        if (batchUsed > 0 && position !== batchStart + batchUsed) await flush();
+        if (batchUsed === 0) batchStart = position;
+        if (!batch) batch = Buffer.allocUnsafe(WRITE_BATCH + info.chunkSize);
+        batch.set(bytes, batchUsed);
+        batchUsed += bytes.length;
+        if (batchUsed >= WRITE_BATCH) await flush();
       },
       async close() {
+        await flush();
         await handle.close();
         await fsp.rename(temp, target);
         this.path = target;
         this.result = { name: path.basename(target), path: target, size: info.size };
       },
       async abort() {
+        batchUsed = 0;
         await handle.close().catch(() => {});
         await fsp.rm(temp, { force: true }).catch(() => {});
       }

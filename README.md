@@ -79,21 +79,125 @@ when you get home.
 
 ---
 
-## What the server can and cannot see
+## How fast, and against what
 
-The relay is not trusted, and the design does not ask you to trust it.
+Three claims here are worth separating.
 
-It can see: which device ids talk to each other, how many bytes moved, and
-when. That is unavoidable for anything that routes traffic.
+**The file that arrives is the file that was sent.** WhatsApp re-encodes photos
+and video on the way through; a 12 MP picture comes out the other side as
+something considerably smaller and softer. SyncDrop moves the original bytes and
+the tests check that byte for byte, so a RAW file, a video, or a signed PDF
+arrives as itself. There is also no 2 GB ceiling: transfers stream, so size is
+limited by the receiving disk rather than by the protocol.
 
-It cannot see: the file, the filename, the file type, or any key. Filenames are
-sealed inside the encrypted envelope along with the content — the server holds
-numbered parts of ciphertext and a recipient id, and nothing else. There is a
-test that asserts exactly this: the server is asked for everything it has about
-a stored transfer, and the filename does not appear anywhere in the answer.
+**On the same Wi-Fi the file does not leave the building.** It goes straight
+from one device to the other. Nothing is uploaded and then downloaded again,
+which is the shape that makes a phone-to-laptop transfer slow no matter how
+fast the link is.
 
-Content keys are derived per transfer from an ephemeral key agreement, so a
-device key that leaks tomorrow does not decrypt the transfers you sent today.
+**The software is not the bottleneck.** Three things in this pipeline were, and
+each was measured on its own and fixed:
+
+| | before | after |
+|---|---|---|
+| reading the file to send | 57 MB/s | 475 MB/s |
+| writing the file received | 73 MB/s | 388 MB/s |
+| redrawing the progress bar | once per 64 KiB chunk | once per frame |
+
+The last one mattered most and was the least obvious: the app rebuilt its
+panels on every chunk, which blocked the same event loop the data channel runs
+on, so drawing the progress bar was slowing down the transfer it was drawing.
+Of the time a 32 MB transfer now takes, reading the file accounts for about 0.9
+seconds and hashing it for 0.09 — the rest is the transport.
+
+What is deliberately **not** claimed here is a megabits-per-second figure for a
+real LAN transfer. Measuring that honestly needs two machines; running both
+ends in one browser on one laptop measures the laptop, not the network.
+
+---
+
+## Sharing into SyncDrop
+
+You should not have to open the app to send something. Both platforms register
+where the operating system expects a share target to be.
+
+**Android.** SyncDrop appears in the share sheet next to WhatsApp, for any file
+type, one file or several. Share → SyncDrop → pick a device. If SyncDrop is
+already open, the share lands in the window that is already running rather than
+starting a second one. The file is not copied first: the app reads the shared
+handle on demand, so choosing a 2 GB video costs nothing until you press send.
+
+**Windows.** Right-click → Send to → SyncDrop, or right-click → Send with
+SyncDrop. Both are registered by the installer, per user, and both are removed
+again when you uninstall. Windows has no share sheet an ordinary desktop app can
+join — the Share contract is open only to MSIX-packaged apps — so these two
+menus are where the feature actually lives. On Windows 11 the right-click entry
+sits under "Show more options", which is where every unpackaged app lands.
+
+Either route starts SyncDrop with the file path, and the running window picks it
+up, so sharing never leaves you with two copies of the app open.
+
+---
+
+## Naming files by their content
+
+On the desktop app there is a toggle: **Name files by their content**. With it
+on, a file is looked at before it is sent, and a name is suggested from what is
+actually in it — `IMG_2841.png` goes out as `handwritten-recipe-card.png`,
+`scan_0001.pdf` as `train-ticket-to-bristol.pdf`.
+
+The model runs on your machine, through Ollama. Nothing is uploaded to get a
+name, it costs nothing per file, and it works with no network at all. If Ollama
+is not running, the send simply keeps the original filename — naming can never
+be the reason a transfer fails.
+
+It is deliberately a laptop-only feature. The toggle is disabled in the browser
+and on the phone, because running a vision model is not something a phone should
+be asked to do on the way to sending a photo.
+
+```bash
+ollama pull minicpm-v4.6
+```
+
+Images, PDFs, and text-shaped files are read. Archives, video, and formats that
+cannot be decoded keep their original name. Override the model with
+`SYNCDROP_NAMER_MODEL` if you prefer a different one.
+
+---
+
+## Where bytes can rest
+
+The honest version, because "encrypted" on its own means very little.
+
+**Plaintext exists in exactly two places: the sending device and the receiving
+device.** Nowhere else, at any point, under any route.
+
+When both devices are awake the file goes straight between them and no third
+machine touches it at all. When the receiver is asleep the sender encrypts the
+file and parks the ciphertext on the relay. The relay is the only case where
+anything rests off-device, and what rests there is:
+
+- encrypted with a key derived for that one transfer, which the relay never sees
+- numbered parts and a recipient id, with the filename and the file type sealed
+  *inside* the envelope rather than beside it
+- deleted the moment the recipient confirms it has the file, and in any case
+  after seven days
+
+The relay can see which device ids talk to each other, how many bytes moved, and
+when. That is unavoidable for anything that routes traffic. It cannot see the
+file, the filename, the file type, or any key. There is a test that asserts
+exactly this: the storage the operator can read is searched for the filename and
+for the file's own bytes, and neither is there.
+
+Content keys come from an ephemeral key agreement per transfer, so a device key
+that leaks tomorrow does not decrypt the files you sent today.
+
+Two smaller things, for completeness. A STUN server is asked one question —
+"what does my address look like from out there?" — and carries no data, but it
+does learn your IP, so the default is one operator rather than a list. And there
+is deliberately **no TURN server**: TURN would mean a third party relaying your
+traffic, so when a direct path cannot be built SyncDrop falls back to its own
+encrypted relay instead, which is the same trust boundary as everything else.
 
 ---
 

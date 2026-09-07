@@ -5,8 +5,10 @@
 // this one module: where the vault is kept, where a received file lands, and
 // whether a local model is available to name files.
 
-import { createBrowserSink, saveToDisk } from "./sinks.js";
+import { createBrowserSink, saveToDisk, sweepIncoming } from "./sinks.js";
 import { webStorage } from "../protocol/vault.js";
+import { hasNativeShare, onNativeShare, takeNativeShares } from "./shares.js";
+import { windowedSource } from "../protocol/sources.js";
 
 const TAURI = () => globalThis.__TAURI__?.core?.invoke ?? null;
 
@@ -88,11 +90,40 @@ function tauriHost() {
 
     reveal: (path) => invoke("reveal", { path }),
 
-    // The vision model runs locally on this machine, so naming costs nothing
-    // and no file content leaves the device to get a name.
-    async suggestName(file) {
-      const head = new Uint8Array(await file.slice(0, 8 * 1024 * 1024).arrayBuffer());
-      return rawInvoke("suggest_name", { name: file.name, mime: file.type || "application/octet-stream" }, head);
+    // The desktop app writes straight to the download folder, so its staging
+    // area is released as each transfer completes and there is nothing to sweep.
+    sweep: async () => 0,
+
+    // The vision model runs on this machine, so naming costs nothing and no
+    // file content leaves the device to get a name. Only the first slice is
+    // read: a model cannot use more than that, and a 4 GB video should not be
+    // walked end to end to be given a title.
+    async suggestName(source) {
+      const head = await source.readChunk(0, Math.min(source.size, 8 * 1024 * 1024));
+      return rawInvoke("suggest_name", { name: source.name, mime: source.mime }, head);
+    },
+
+    // "Send to > SyncDrop" and the Explorer right-click reach the running
+    // window as file paths. The bytes stay on the Rust side until they are sent.
+    async takeShares() {
+      const entries = await invoke("inbox_take").catch(() => []);
+      return entries.map((entry) =>
+        windowedSource({
+          name: entry.name,
+          mime: entry.mime,
+          size: entry.size,
+          // inbox_read answers on the raw response body, so this comes back
+          // as an ArrayBuffer rather than a JSON array of numbers.
+          fetchWindow: (offset, length) =>
+            invoke("inbox_read", { path: entry.path, offset, length }).then(
+              (bytes) => new Uint8Array(bytes)
+            )
+        })
+      );
+    },
+
+    onShare(handler) {
+      globalThis.__TAURI__?.event?.listen?.("shared-files", () => handler());
     },
 
     async deviceName() {
@@ -114,8 +145,16 @@ function browserHost(platform) {
       return null;
     },
     reveal: async () => {},
-    // No local model in a browser; the sender keeps the original filename.
+    sweep: sweepIncoming,
+    // No local model in a browser or on the phone; the sender keeps the
+    // original filename. Naming is a laptop feature by design: it runs a vision
+    // model, and a phone should not be asked to.
     suggestName: async () => null,
+    // The Android build registers a share-sheet plugin; a plain browser tab has
+    // nothing to take, and the installed PWA gets its shares through the
+    // service worker instead.
+    takeShares: () => (hasNativeShare() ? takeNativeShares() : Promise.resolve([])),
+    onShare: (handler) => onNativeShare(handler),
     async deviceName() {
       return defaultDeviceName(platform);
     }

@@ -9,3 +9,7 @@
 - Added: 2026-08-31 10:00 | Completed: 2026-08-31 16:05 | Phase 9 — CLI rewrite on the new protocol
 - Added: 2026-08-31 10:00 | Completed: 2026-08-31 17:20 | Phase 10 — Cloudflare Worker + R2 + Durable Objects production server
 - Added: 2026-08-31 10:00 | Completed: 2026-08-31 17:55 | Phase 11 — docs, browser end-to-end verification, final push
+- Added: 2026-09-07 09:10 | Completed: 2026-09-07 10:30 | Android — ACTION_SEND / ACTION_SEND_MULTIPLE intent filters and a streaming share plugin
+- Added: 2026-09-07 09:10 | Completed: 2026-09-07 10:55 | Windows — CLI file arguments, single-instance forwarding, Send to and Explorer context menu
+- Added: 2026-09-07 09:10 | Completed: 2026-09-07 11:15 | AI rename verified against the local vision model, laptop only
+- Added: 2026-09-07 09:10 | Completed: 2026-09-07 11:35 | Audit — storage surface, throughput fixes, long-distance path, receiver-off path

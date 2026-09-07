@@ -18,6 +18,7 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"
+tauri-plugin-single-instance = "2"
 # Blocking HTTP is fine here: naming runs on Tauri's async command pool, and the
 # only endpoint is a model on this machine.
 ureq = { version = "3", features = ["json"] }

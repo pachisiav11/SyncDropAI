@@ -14,10 +14,18 @@
 import { CONTEXT, P2P_BUFFER_LOW } from "./constants.js";
 import { signContext, verifyContext } from "./identity.js";
 
-export const DEFAULT_ICE_SERVERS = [
-  { urls: "stun:stun.cloudflare.com:3478" },
-  { urls: "stun:stun.l.google.com:19302" }
-];
+// A STUN server is asked one question - "what does my address look like from
+// out there?" - and never carries a byte of the file. It does learn your IP, so
+// the default is a single operator rather than a list that tells several
+// companies every time two of your own devices talk. Add more through the
+// iceServers option if a hostile NAT needs them.
+//
+// There is deliberately no TURN server. TURN would relay the media itself, and
+// although WebRTC would still be encrypted end to end, it would mean a third
+// party carrying your traffic. When the direct path cannot be built, SyncDrop
+// falls back to its own encrypted relay instead, which is the same trust
+// boundary as the rest of the system.
+export const DEFAULT_ICE_SERVERS = [{ urls: "stun:stun.cloudflare.com:3478" }];
 
 const CHANNEL_LABEL = "syncdrop";
 const CONNECT_TIMEOUT_MS = 30000;

@@ -58,6 +58,22 @@ export function createTransferSession({
     }
   };
 
+// A 64 KiB chunk at LAN speed means thousands of progress events per file. Any
+// host that redraws on each one spends more time painting than transferring, so
+// the engine reports on a clock instead: roughly twenty times a second, plus a
+// guaranteed final event so the bar always lands exactly on the file size.
+const PROGRESS_INTERVAL_MS = 50;
+
+function createProgressGate() {
+  let last = 0;
+  return (done) => {
+    const now = Date.now();
+    if (!done && now - last < PROGRESS_INTERVAL_MS) return false;
+    last = now;
+    return true;
+  };
+}
+
   const control = (message) => channel.send(encodeControl(message));
 
   function allocateStreamId() {
@@ -90,6 +106,7 @@ export function createTransferSession({
     const { source, streamId } = entry;
     const digest = createChunkDigest();
     const meter = createRateMeter();
+    const gate = createProgressGate();
     const total = chunkCount(source.size, chunkSize);
 
     for (let index = entry.resumeFrom; index < total; index += 1) {
@@ -101,16 +118,18 @@ export function createTransferSession({
       if (entry.cancelled) throw new Error("Cancelled");
       channel.send(encodeChunk(streamId, index, bytes));
       entry.transferred = Math.min(source.size, offset + bytes.length);
-      emit({
-        type: "progress",
-        direction: "send",
-        streamId,
-        id: entry.id,
-        name: source.name,
-        transferred: entry.transferred,
-        total: source.size,
-        rate: meter(entry.transferred)
-      });
+      if (gate(index === total - 1)) {
+        emit({
+          type: "progress",
+          direction: "send",
+          streamId,
+          id: entry.id,
+          name: source.name,
+          transferred: entry.transferred,
+          total: source.size,
+          rate: meter(entry.transferred)
+        });
+      }
     }
 
     // Chunks the receiver already had on a resume never passed through this
@@ -193,6 +212,7 @@ export function createTransferSession({
           received: 0,
           transferred: 0,
           meter: createRateMeter(),
+          gate: createProgressGate(),
           state: TRANSFER_STATE.receiving
         });
         control({ type: "accept", streamId: info.streamId, resumeFrom: sink.resumeFrom ?? 0 });
@@ -322,16 +342,18 @@ export function createTransferSession({
     await arriving.sink.write(sequence, payload);
     arriving.received += 1;
     arriving.transferred = Math.min(arriving.size, arriving.transferred + payload.length);
-    emit({
-      type: "progress",
-      direction: "receive",
-      streamId,
-      id: arriving.id,
-      name: arriving.name,
-      transferred: arriving.transferred,
-      total: arriving.size,
-      rate: arriving.meter(arriving.transferred)
-    });
+    if (arriving.gate(arriving.transferred >= arriving.size)) {
+      emit({
+        type: "progress",
+        direction: "receive",
+        streamId,
+        id: arriving.id,
+        name: arriving.name,
+        transferred: arriving.transferred,
+        total: arriving.size,
+        rate: arriving.meter(arriving.transferred)
+      });
+    }
   }
 
   // Messages must be applied strictly in the order they arrived. Both handlers

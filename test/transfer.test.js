@@ -76,11 +76,16 @@ test("progress is reported on both sides and ends at the file size", async () =>
   const bytes = randomBytes(8000);
   await sender.send(bytesSource({ name: "clip.mp4", bytes }));
 
-  assert.ok(sendProgress.length >= 8);
+  // Progress is reported on a clock rather than per chunk, so the count is not
+  // fixed - a transfer this small may report once. What must hold is that both
+  // sides hear about it and that the last word is the whole file.
+  assert.ok(sendProgress.length >= 1, "the sender reported progress");
+  assert.ok(receiveProgress.length >= 1, "the receiver reported progress");
   assert.equal(sendProgress.at(-1), 8000);
   assert.equal(receiveProgress.at(-1), 8000);
   // Monotonic: a progress bar must never go backwards.
   assert.deepEqual(sendProgress, [...sendProgress].sort((a, b) => a - b));
+  assert.deepEqual(receiveProgress, [...receiveProgress].sort((a, b) => a - b));
 });
 
 test("the receiver can decline a transfer", async () => {

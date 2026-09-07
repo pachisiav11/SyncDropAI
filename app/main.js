@@ -35,11 +35,31 @@ function defaultServerUrl() {
   return "http://localhost:8787";
 }
 
-function refresh() {
+// Coalesced to one paint per frame. Progress arrives faster than a screen can
+// show it, and rebuilding the panels on every event costs more time than the
+// transfer itself - it also blocks the event loop the data channel runs on, so
+// redrawing eagerly makes the transfer it is describing slower.
+let frame = 0;
+let fallback = 0;
+
+function draw() {
+  if (frame) cancelAnimationFrame(frame);
+  clearTimeout(fallback);
+  frame = 0;
+  fallback = 0;
   state.peers = client
     ? client.peers().map((peer) => ({ ...peer, online: client.isOnline(peer.deviceId) }))
     : [];
   ui.render(state, handlers);
+}
+
+// A frame and a timer, whichever comes first. A hidden or backgrounded tab
+// never gets an animation frame, and a transfer that finishes while the window
+// is in the background must still leave the panel showing what happened.
+function refresh() {
+  if (frame || fallback) return;
+  if (typeof requestAnimationFrame === "function") frame = requestAnimationFrame(draw);
+  fallback = setTimeout(draw, 250);
 }
 
 function peerName(deviceId) {
@@ -179,33 +199,46 @@ async function maybeAutoSave(id) {
 }
 
 async function sendTo(deviceId) {
-  const files = state.pending.splice(0, state.pending.length);
+  const queued = state.pending.splice(0, state.pending.length);
   refresh();
 
-  for (const file of files) {
-    let name = file.name;
+  for (const source of queued) {
     if (state.autoName) {
       try {
-        const suggested = await host.suggestName(file);
-        if (suggested) name = suggested;
+        const suggested = await host.suggestName(source);
+        if (suggested) source.name = suggested;
       } catch {
         // Naming is a convenience. A model that is not running must never stop
         // a transfer, so fall through with the original filename.
       }
     }
 
-    const source = blobSource(file, { name });
     try {
       await client.send(deviceId, source);
     } catch (error) {
-      ui.toast(`${name}: ${error.message}`);
+      ui.toast(`${source.name}: ${error.message}`);
+    } finally {
+      // A share-sheet source holds an open handle on the other side of a
+      // bridge; a file picked in the page has nothing to release.
+      try {
+        await source.close?.();
+      } catch {
+        // Releasing a handle we are done with cannot fail usefully.
+      }
     }
   }
 }
 
-function addFiles(files) {
-  for (const file of files) state.pending.push(file);
+// Everything queued for sending is a source, whichever door it came in by: a
+// file picked in the page, a share from the Android sheet, or a path from the
+// Windows shell. They all read on demand and none of them is copied first.
+function addSources(sources) {
+  for (const source of sources) state.pending.push(source);
   refresh();
+}
+
+function addFiles(files) {
+  addSources([...files].map((file) => blobSource(file)));
 }
 
 const handlers = {
@@ -423,6 +456,15 @@ function setupPicker() {
   });
 }
 
+// Shares handed over by the operating system: the Android share sheet in the
+// installed app, and "Send to" or the right-click menu on Windows.
+async function collectSystemShares({ announce = true } = {}) {
+  const sources = await host.takeShares().catch(() => []);
+  if (sources.length === 0) return;
+  addSources(sources);
+  if (announce) ui.toast(`${sources.length} file${sources.length === 1 ? "" : "s"} ready to send`);
+}
+
 // Files shared into the installed PWA from the Android share sheet arrive as a
 // POST that the service worker parks for us.
 async function collectShareTarget() {
@@ -478,7 +520,11 @@ async function boot() {
   setupPicker();
   refresh();
 
+  await host.sweep?.();
+
   await collectShareTarget();
+  await collectSystemShares({ announce: false });
+  host.onShare(() => collectSystemShares());
 
   try {
     await client.start();
