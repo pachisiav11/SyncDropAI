@@ -462,3 +462,24 @@ pub async fn namer_fetch(app: tauri::AppHandle) -> Result<(), String> {
     .await
     .map_err(|e| format!("The download could not start: {e}"))?
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The download URLs are built by hand, so a typo in either filename would
+    /// only surface the first time somebody switched naming on - by which point
+    /// they are staring at a failure with 1.7 GB of intent behind it. A HEAD
+    /// request costs nothing and proves both names still resolve.
+    #[test]
+    fn the_weights_are_where_we_think_they_are() {
+        let Ok(model) = content_length(MODEL_FILE) else {
+            eprintln!("skipped: Hugging Face is not reachable from here");
+            return;
+        };
+        let mmproj = content_length(MMPROJ_FILE).expect("the projector must resolve too");
+        eprintln!("model {model} bytes, projector {mmproj} bytes");
+        assert!(model > 500_000_000, "the language weights should be around 630 MB");
+        assert!(mmproj > 1_000_000_000, "the projector should be around 1.11 GB");
+    }
+}
