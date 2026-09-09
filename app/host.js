@@ -16,6 +16,13 @@ export function isTauri() {
   return Boolean(TAURI());
 }
 
+// Tauri serves the window from its own protocol and Capacitor serves the Android
+// build from https://localhost. Neither origin has anything to do with where the
+// relay lives, so an installed app must be told rather than left to guess.
+export function isNative() {
+  return isTauri() || Boolean(globalThis.Capacitor?.isNativePlatform?.());
+}
+
 export function detectPlatform() {
   if (isTauri()) return "windows";
   const ua = navigator.userAgent || "";

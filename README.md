@@ -207,6 +207,29 @@ encrypted relay instead, which is the same trust boundary as everything else.
 npm install
 ```
 
+### The one address to set
+
+Everything else here is account-free, but two devices still have to agree on
+where they meet. A packaged app cannot work that out for itself: the Windows
+shell serves its window from a custom protocol and the Android shell serves it
+from `https://localhost`, so neither origin says anything about where the relay
+lives. Guessing from the origin is exactly how setup used to fail.
+
+So the address is compiled in. Copy `.env.example` to `.env` and set it once:
+
+```
+SYNCDROP_SERVER=https://syncdrop.example.workers.dev
+```
+
+Every build made afterwards ships knowing where to connect, so somebody who
+installs SyncDrop never types an address: they open it and pair. Leave it empty
+and the web build falls back to the origin it was served from, which is right
+when the relay is the thing serving it.
+
+If the app cannot reach that address it says so on the first screen, names the
+address it tried, and puts the field to change it one button away, instead of
+sitting on "Connecting" for ever.
+
 ### The web app
 
 ```bash
@@ -238,8 +261,11 @@ Build an installer with `npm run tauri:build`.
 ```bash
 npm run build
 npm run cap:sync
-npm run cap:open:android
+cd android && ./gradlew assembleDebug
 ```
+
+The APK lands in `android/app/build/outputs/apk/debug/`. Set `.env` before
+`npm run build`, or the phone will not know which relay to call.
 
 ### The command line
 
@@ -269,8 +295,16 @@ npm run serve
 ```
 
 That serves the rendezvous socket, the relay API, and the built app from one
-process. Point `SYNCDROP_DATA` at a directory to keep queued transfers across
-restarts.
+process. It prints the address to use from elsewhere on the network, because a
+phone cannot dial `localhost`; put that in `.env` before building the APK. Point
+`SYNCDROP_DATA` at a directory to keep queued transfers across restarts.
+
+A relay on a home network is plain HTTP, which both packaged apps have to be
+allowed to reach: the Android build ships a network security config that permits
+cleartext, and the desktop build's `connect-src` accepts any host. Neither is a
+weakening of what SyncDrop promises — the relay is untrusted infrastructure by
+design, carrying ciphertext and routing ids only — but both are deliberate, and
+worth knowing about.
 
 **On Cloudflare:**
 

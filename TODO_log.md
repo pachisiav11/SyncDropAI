@@ -13,3 +13,5 @@
 - Added: 2026-09-07 09:10 | Completed: 2026-09-07 10:55 | Windows — CLI file arguments, single-instance forwarding, Send to and Explorer context menu
 - Added: 2026-09-07 09:10 | Completed: 2026-09-07 11:15 | AI rename verified against the local vision model, laptop only
 - Added: 2026-09-07 09:10 | Completed: 2026-09-07 11:35 | Audit — storage surface, throughput fixes, long-distance path, receiver-off path
+- Added: 2026-09-09 22:45 | Completed: 2026-09-09 22:47 | Build the NSIS installer for the first time (SyncDrop_2.0.0_x64-setup.exe)
+- Added: 2026-09-09 22:51 | Completed: 2026-09-09 22:58 | Make first-run setup seamless: compile the relay address in at build time, fix the Android/Tauri origin guess, surface an unreachable relay with a one-button fix, print the LAN address on serve, allow packaged apps to reach a self-hosted relay

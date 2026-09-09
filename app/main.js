@@ -5,7 +5,7 @@ import { createSyncDrop } from "../protocol/client.js";
 import { openVault } from "../protocol/vault.js";
 import { blobSource } from "../protocol/sources.js";
 import { formatPairingCode, parsePairingInput } from "../protocol/pairing.js";
-import { createHost } from "./host.js";
+import { createHost, isNative } from "./host.js";
 import * as ui from "./ui.js";
 
 const SERVER_KEY = "syncdrop.server";
@@ -17,6 +17,8 @@ const state = {
   status: "connecting",
   deviceName: "",
   deviceId: "",
+  serverUrl: "",
+  connectError: "",
   peers: [],
   pending: [],
   transfers: new Map(),
@@ -27,12 +29,25 @@ let host;
 let client;
 let vault;
 
-// A Tauri window is served from its own protocol, so it has no useful origin to
-// infer a server from; the web build almost always wants the origin it came
-// from, which is what `npm run serve` hands out.
+// Compiled in from SYNCDROP_SERVER at build time. This is what makes an
+// installed app work without anyone typing an address: the packaged builds have
+// no origin worth trusting, and asking a person to enter a URL on a phone before
+// the app does anything is the whole reason setup used to fail.
+const BUILT_IN_SERVER = typeof __SYNCDROP_SERVER__ === "string" ? __SYNCDROP_SERVER__ : "";
+
+// Where `npm run serve` listens. Only a fallback for development; a shipped
+// build has the address above.
+const LOCAL_SERVER = "http://localhost:8787";
+
 function defaultServerUrl() {
-  if (location.protocol.startsWith("http")) return location.origin;
-  return "http://localhost:8787";
+  if (BUILT_IN_SERVER) return BUILT_IN_SERVER;
+  // The built web app is served by the relay itself, so its own origin is the
+  // right guess - but only there. Vite's dev server is on another port, and a
+  // native shell reports an origin that belongs to the shell, not to a server.
+  if (!isNative() && !import.meta.env.DEV && location.protocol.startsWith("http")) {
+    return location.origin;
+  }
+  return LOCAL_SERVER;
 }
 
 // Coalesced to one paint per frame. Progress arrives faster than a screen can
@@ -83,10 +98,25 @@ function upsert(id, patch) {
 
 function onProtocolEvent(event) {
   switch (event.type) {
-    case "status":
+    case "status": {
       state.status = event.status;
+      // The signaling client retries forever rather than failing, so a wrong or
+      // unreachable address never surfaces as a thrown error. This status is the
+      // only moment we learn that the one thing setup depends on is not working.
+      // Only a live connection clears the notice: the retry loop passes through
+      // "offline" and "connecting" between attempts, and the card must not blink.
+      let notice = state.connectError;
+      if (event.status === "error") notice = event.detail ?? "Connection failed";
+      if (event.status === "ready") notice = "";
+
+      if (notice !== state.connectError) {
+        state.connectError = notice;
+        refresh();
+        return;
+      }
       ui.renderStatus(state);
       return;
+    }
 
     case "presence":
     case "paired":
@@ -270,7 +300,8 @@ const handlers = {
     }
   },
   onReveal: (transfer) => host.reveal(transfer.savedPath),
-  onRetry: () => ui.toast("Pick the file again to retry")
+  onRetry: () => ui.toast("Pick the file again to retry"),
+  onConfigure: () => openSettings()
 };
 
 // --- pairing dialog ---------------------------------------------------------
@@ -362,15 +393,17 @@ function setupPairing() {
 
 // --- settings dialog --------------------------------------------------------
 
+async function openSettings() {
+  el("device-name").value = state.deviceName;
+  el("server-url").value = (await host.storage.getItem(SERVER_KEY)) ?? defaultServerUrl();
+  ui.renderIdentity(state);
+  el("settings-dialog").showModal();
+}
+
 function setupSettings() {
   const dialog = el("settings-dialog");
 
-  el("settings-button").addEventListener("click", async () => {
-    el("device-name").value = state.deviceName;
-    el("server-url").value = (await host.storage.getItem(SERVER_KEY)) ?? defaultServerUrl();
-    ui.renderIdentity(state);
-    dialog.showModal();
-  });
+  el("settings-button").addEventListener("click", openSettings);
 
   el("settings-close").addEventListener("click", () => dialog.close());
 
@@ -492,6 +525,7 @@ async function boot() {
   host = createHost();
 
   const serverUrl = (await host.storage.getItem(SERVER_KEY)) ?? defaultServerUrl();
+  state.serverUrl = serverUrl;
   state.autoName = (await host.storage.getItem(RENAME_KEY)) === "true" && host.kind === "tauri";
 
   vault = await openVault(host.storage, {
@@ -526,15 +560,6 @@ async function boot() {
   await collectSystemShares({ announce: false });
   host.onShare(() => collectSystemShares());
 
-  try {
-    await client.start();
-  } catch (error) {
-    state.status = "error";
-    ui.renderStatus(state);
-    ui.toast(`Cannot reach ${serverUrl}: ${error.message}`);
-  }
-  refresh();
-
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
   }
@@ -546,6 +571,16 @@ async function boot() {
       client.collect().catch(() => {});
     }
   });
+
+  // Not awaited. The signaling client retries until it succeeds, so waiting here
+  // would leave a device that started while its relay was down stuck before the
+  // rest of this function - which is exactly the situation setup has to survive.
+  client.start().catch((error) => {
+    state.status = "error";
+    state.connectError = error.message;
+    refresh();
+  });
+  refresh();
 }
 
 boot().catch((error) => {

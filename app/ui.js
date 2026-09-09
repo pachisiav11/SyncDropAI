@@ -52,13 +52,34 @@ function routeBadge(transfer) {
   return null;
 }
 
-export function renderDevices(state, { onSend, onForget }) {
+export function renderDevices(state, { onSend, onForget, onConfigure }) {
   const host = el("devices");
   host.textContent = "";
 
+  // The address is the one thing a person may have to supply, so the fix sits
+  // one button away. This goes above the device list rather than replacing it:
+  // devices paired earlier are still worth seeing while the relay is down.
+  if (state.connectError) {
+    const card = document.createElement("div");
+    card.className = "empty setup";
+    card.innerHTML = `
+      <strong>Cannot reach the server</strong>
+      <span>SyncDrop tried <code>${escapeHtml(state.serverUrl ?? "")}</code>. Both devices need the same address before they can find each other.</span>
+      <button type="button" class="primary">Set the address</button>
+    `;
+    card.querySelector("button").addEventListener("click", () => onConfigure?.());
+    host.append(card);
+  }
+
   if (state.peers.length === 0) {
-    host.innerHTML =
-      '<div class="empty">No devices yet. Pair one to start sending &mdash; there is no account to create.</div>';
+    // The card above already explains why the list is empty.
+    if (!state.connectError) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.innerHTML =
+        "No devices yet. Pair one to start sending &mdash; there is no account to create.";
+      host.append(empty);
+    }
     return;
   }
 

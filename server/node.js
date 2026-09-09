@@ -7,6 +7,7 @@
 
 import http from "node:http";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
@@ -53,6 +54,13 @@ function readBody(request) {
     request.on("end", () => resolve(new Uint8Array(Buffer.concat(chunks))));
     request.on("error", reject);
   });
+}
+
+function lanAddresses() {
+  return Object.values(os.networkInterfaces())
+    .flat()
+    .filter((entry) => entry && entry.family === "IPv4" && !entry.internal)
+    .map((entry) => entry.address);
 }
 
 function serveStatic(staticDir, urlPath, response) {
@@ -150,6 +158,12 @@ export async function startServer({
   const address = server.address();
   log(`listening on http://${host}:${address.port}  (ws://${host}:${address.port}/ws)`);
   if (staticDir) log("serving app from", staticDir);
+  // A phone cannot use "localhost", and the address it does need is the one
+  // thing self-hosting makes somebody hunt for. Print it rather than make them
+  // go and find it.
+  for (const lan of lanAddresses()) {
+    log(`reachable on your network at http://${lan}:${address.port}`);
+  }
   log("store:", store.kind, dataDir ? `at ${dataDir}` : "(in memory, nothing survives a restart)");
 
   return {

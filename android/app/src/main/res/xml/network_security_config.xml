@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext is permitted so that a self-hosted relay on a home network can be
+  reached. Without it, pointing the phone at http://192.168.x.x:8787 fails with
+  no visible error, which is the worst possible way for setup to go wrong.
+
+  This does not weaken what SyncDrop promises. The relay is untrusted
+  infrastructure by design: file content is encrypted end to end before it is
+  handed over, session descriptions are signed, and pairing is confirmed with an
+  HMAC over a code the server never sees. An attacker on the same network sees
+  ciphertext and routing ids, and cannot substitute keys for either device.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
