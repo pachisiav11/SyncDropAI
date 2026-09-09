@@ -168,6 +168,18 @@ pub async fn suggest_name(request: Request<'_>) -> Result<Option<String>, String
     name_for(bytes, &name, &mime)
 }
 
+/// Whether the model is there to be asked. The toggle in the UI promises
+/// something only this can deliver, so it is checked at the moment somebody
+/// switches it on rather than discovered as silence when a file arrives with
+/// its old name.
+#[tauri::command]
+pub fn namer_ready() -> bool {
+    ureq::get(format!("{}/api/tags", ollama_host()))
+        .call()
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
+}
+
 /// The whole feature, minus the Tauri request wrapper. Kept separate so it can
 /// be exercised against the model without a running window.
 pub fn name_for(bytes: &[u8], name: &str, mime: &str) -> Result<Option<String>, String> {
@@ -200,13 +212,6 @@ pub fn name_for(bytes: &[u8], name: &str, mime: &str) -> Result<Option<String>, 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn model_is_running() -> bool {
-        ureq::get(format!("{}/api/tags", ollama_host()))
-            .call()
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
-    }
 
     #[test]
     fn a_description_becomes_a_filename_that_keeps_its_extension() {
@@ -241,7 +246,7 @@ mod tests {
     // when Ollama is not running, because naming is optional by design.
     #[test]
     fn the_local_model_names_a_document_from_its_text() {
-        if !model_is_running() {
+        if !namer_ready() {
             eprintln!("skipped: no Ollama on {}", ollama_host());
             return;
         }
@@ -268,7 +273,7 @@ mod tests {
 
     #[test]
     fn the_local_model_names_an_image_from_what_is_in_it() {
-        if !model_is_running() {
+        if !namer_ready() {
             eprintln!("skipped: no Ollama on {}", ollama_host());
             return;
         }

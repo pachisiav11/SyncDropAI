@@ -135,7 +135,9 @@ function tauriHost() {
 
     async deviceName() {
       return invoke("device_name").catch(() => defaultDeviceName("windows"));
-    }
+    },
+
+    namerReady: () => invoke("namer_ready").catch(() => false)
   };
 }
 
@@ -157,6 +159,7 @@ function browserHost(platform) {
     // original filename. Naming is a laptop feature by design: it runs a vision
     // model, and a phone should not be asked to.
     suggestName: async () => null,
+    namerReady: async () => false,
     // The Android build registers a share-sheet plugin; a plain browser tab has
     // nothing to take, and the installed PWA gets its shares through the
     // service worker instead.

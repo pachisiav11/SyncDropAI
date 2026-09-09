@@ -28,6 +28,7 @@ const state = {
 let host;
 let client;
 let vault;
+let namingWarned = false;
 
 // Compiled in from SYNCDROP_SERVER at build time. This is what makes an
 // installed app work without anyone typing an address: the packaged builds have
@@ -239,7 +240,14 @@ async function sendTo(deviceId) {
         if (suggested) source.name = suggested;
       } catch {
         // Naming is a convenience. A model that is not running must never stop
-        // a transfer, so fall through with the original filename.
+        // a transfer, so fall through with the original filename - but say so
+        // once. The toggle can have been switched on while the model was up and
+        // the model stopped since, and a file arriving under its old name is
+        // otherwise indistinguishable from the feature not existing.
+        if (!namingWarned) {
+          namingWarned = true;
+          ui.toast("Could not reach the naming model. Files keep their own names.", 4200);
+        }
       }
     }
 
@@ -484,6 +492,16 @@ function setupPicker() {
     ? "Content naming runs a local model, so it is only available on the desktop app"
     : "Names files from their content using a model running on this machine";
   toggle.addEventListener("change", async () => {
+    // Switching this on is a promise the model has to keep. Checking here means
+    // an absent model is a sentence on screen, rather than files quietly
+    // arriving under their old names with nothing to explain why.
+    if (toggle.checked && !(await host.namerReady())) {
+      toggle.checked = false;
+      state.autoName = false;
+      await host.storage.setItem(RENAME_KEY, "false");
+      ui.toast("No local model answered. Naming needs Ollama running on this machine.", 4200);
+      return;
+    }
     state.autoName = toggle.checked;
     await host.storage.setItem(RENAME_KEY, String(state.autoName));
   });

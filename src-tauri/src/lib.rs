@@ -41,6 +41,7 @@ pub fn run() {
             inbox::inbox_take,
             inbox::inbox_read,
             naming::suggest_name,
+            naming::namer_ready,
         ])
         .run(tauri::generate_context!())
         .expect("SyncDrop failed to start");
