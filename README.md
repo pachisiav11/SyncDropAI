@@ -146,22 +146,32 @@ on, a file is looked at before it is sent, and a name is suggested from what is
 actually in it — `IMG_2841.png` goes out as `handwritten-recipe-card.png`,
 `scan_0001.pdf` as `train-ticket-to-bristol.pdf`.
 
-The model runs on your machine, through Ollama. Nothing is uploaded to get a
-name, it costs nothing per file, and it works with no network at all. If Ollama
-is not running, the send simply keeps the original filename — naming can never
-be the reason a transfer fails.
+The model runs on your machine and SyncDrop brings its own. There is nothing to
+install: a prebuilt `llama-server` ships inside the app, and the first time the
+toggle is switched on it offers to fetch the weights — MiniCPM-V 4.6, about
+1.7 GB, once. Nothing is uploaded to get a name, it costs nothing per file, and
+it works with no network at all after that first download.
+
+The server is started when a name is wanted and stopped again after a few idle
+minutes, so a feature nobody is using does not hold 1.7 GB of the machine. It is
+owned rather than borrowed: killed by a job object that the kernel closes
+whichever way the app dies, so a crash cannot strand a process holding that much
+memory. If the model is missing, the send simply keeps the original filename —
+naming can never be the reason a transfer fails.
 
 It is deliberately a laptop-only feature. The toggle is disabled in the browser
 and on the phone, because running a vision model is not something a phone should
 be asked to do on the way to sending a photo.
 
-```bash
-ollama pull minicpm-v4.6
-```
-
 Images, PDFs, and text-shaped files are read. Archives, video, and formats that
-cannot be decoded keep their original name. Override the model with
-`SYNCDROP_NAMER_MODEL` if you prefer a different one.
+cannot be decoded keep their original name. `SYNCDROP_MODEL_DIR` moves the
+weights; `SYNCDROP_LLAMA_SERVER` points at a different server binary.
+
+Quantisation is a deliberate choice rather than a default. The projector is a
+fixed 1.11 GB and cannot be quantised without hurting what the model can see, so
+it stays at f16 and the language weights are the only real decision. Q6_K keeps
+that side close to lossless for 630 MB, on a model small enough — 752M
+parameters — that 4-bit would actually be felt.
 
 ---
 
@@ -253,6 +263,21 @@ browser cannot do live in the Rust side:
   account, instead of sitting in browser storage
 - received files stream straight to a folder you choose
 - the local vision model that names files by their content runs in-process
+
+The naming model's runner is not in this repository: `vendor/` is ignored,
+because 39 MB of prebuilt binaries do not belong in git history. Before the
+first desktop build, put the Windows llama.cpp release there:
+
+```
+vendor/llama.cpp/llama-server.exe
+vendor/llama.cpp/*.dll          # ggml-base, ggml-cpu-*, ggml, llama, mtmd, libomp140
+```
+
+Take them from a [llama.cpp release](https://github.com/ggml-org/llama.cpp/releases)
+(`llama-<build>-bin-win-cpu-x64.zip`). The whole set of `ggml-cpu-*` variants
+matters: that build dispatches on the CPU it finds at run time, which is what
+lets one installer work on machines without AVX-512. `npm run tauri:build` fails
+if they are missing, because the bundle lists them as resources.
 
 Build an installer with `npm run tauri:build`.
 

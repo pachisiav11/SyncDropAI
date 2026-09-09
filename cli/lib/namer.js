@@ -1,7 +1,8 @@
-// Local, zero-cost filename suggestion using a vision model served by Ollama
-// (default: MiniCPM-V 4.6). Node/Electron only — never imported by the browser
-// app, which can't reach a local model. The pure kebab/validation helpers still
-// come from protocol/filenames.js so names match what the rest of the app makes.
+// Local, zero-cost filename suggestion using the MiniCPM-V 4.6 vision model that
+// ships with SyncDrop, run by the bundled llama.cpp server. Node only — never
+// imported by the browser app, which cannot reach a local model. The pure
+// kebab/validation helpers still come from protocol/filenames.js so names match
+// what the rest of the app makes.
 //
 // Design notes learned from benchmarking on CPU-only hardware (Iris Xe):
 //   * `think: false` is MANDATORY. MiniCPM-V 4.6's backbone is a reasoning model
@@ -11,14 +12,11 @@
 //     "kebab-case filename" sends it into a formatting reasoning spiral.
 //   * Input resolution drives latency (the vision encoder tiles the image), so
 //     we downscale to a modest edge before sending.
-
 import { Jimp } from "jimp";
 import { cleanFilename, getExtension, isValidAiFilename } from "../../protocol/filenames.js";
+import { describe, modelDir } from "./llama.js";
 
-const OLLAMA_HOST = (process.env.OLLAMA_HOST || "http://127.0.0.1:11434").replace(/\/$/, "");
-const MODEL = process.env.SYNCDROP_NAMER_MODEL || "minicpm-v4.6";
 const MAX_EDGE = Number(process.env.SYNCDROP_NAMER_MAX_EDGE || 512);
-const TIMEOUT_MS = Number(process.env.SYNCDROP_NAMER_TIMEOUT_MS || 120000);
 const PDF_TEXT_CHARS = 1200;
 
 // Only what Jimp can actually decode (verified against jimp 1.6.1). This is a
@@ -46,32 +44,6 @@ const IMAGE_PROMPT =
   "Describe what is in this image in 3 to 6 words, as specifically as you can. Include any app, brand, product, or document name you can read. Reply with the description only. No punctuation, no quotes, and never use the words image, photo, picture, screenshot or file.";
 const TEXT_PROMPT =
   "Below is the start of a document. In 3 to 6 words, say specifically what it is. Reply with the description only. No punctuation, no quotes, and never use the words document, text or file.\n\n";
-
-// Ask Ollama to generate, with reasoning disabled and a short output cap.
-async function ollamaDescribe({ prompt, images }) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  try {
-    const res = await fetch(`${OLLAMA_HOST}/api/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: MODEL,
-        prompt,
-        images: images ?? [],
-        think: false,
-        stream: false,
-        options: { temperature: 0.1, num_predict: 40 }
-      })
-    });
-    if (!res.ok) throw new Error(`Ollama ${res.status}: ${await res.text()}`);
-    const data = await res.json();
-    return String(data.response ?? "").trim();
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 // Downscale so the vision encoder sees fewer tiles, then hand back base64 JPEG.
 async function toModelImage(buffer) {
@@ -150,19 +122,19 @@ export async function suggestNameFromContent({ buffer, mimeType, originalFilenam
 
   if (VISION_MIME.has(mime)) {
     const image = await toModelImage(buffer);
-    description = await ollamaDescribe({ prompt: IMAGE_PROMPT, images: [image] });
+    description = await describe({ prompt: IMAGE_PROMPT, image });
   } else if (mime === "application/pdf") {
     const text = await extractPdfText(buffer);
     if (!text) return null; // scanned/imageless PDF — no text layer to read
-    description = await ollamaDescribe({ prompt: TEXT_PROMPT + text });
+    description = await describe({ prompt: TEXT_PROMPT + text });
   } else if (HTML_MIME.has(mime) || mime === "image/svg+xml") {
     const text = extractMarkupText(buffer);
     if (!text) return null;
-    description = await ollamaDescribe({ prompt: TEXT_PROMPT + text });
+    description = await describe({ prompt: TEXT_PROMPT + text });
   } else if (mime.startsWith("text/") || TEXT_MIME.has(mime)) {
     const text = buffer.toString("utf8").replace(/\s+/g, " ").trim().slice(0, PDF_TEXT_CHARS);
     if (!text) return null;
-    description = await ollamaDescribe({ prompt: TEXT_PROMPT + text });
+    description = await describe({ prompt: TEXT_PROMPT + text });
   } else {
     // Unsupported (archives, binaries, webp/heic we can't decode) — keep original.
     return null;
@@ -171,4 +143,4 @@ export async function suggestNameFromContent({ buffer, mimeType, originalFilenam
   return descriptionToFilename(description, originalFilename);
 }
 
-export const namerConfig = { OLLAMA_HOST, MODEL, MAX_EDGE };
+export const namerConfig = { modelDir: modelDir(), maxEdge: MAX_EDGE };

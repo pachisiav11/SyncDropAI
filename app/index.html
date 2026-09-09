@@ -112,6 +112,25 @@
       </div>
     </dialog>
 
+    <dialog id="namer-dialog" class="sheet">
+      <div class="sheet-body">
+        <h3>Download the naming model</h3>
+        <p class="muted">
+          Naming files by their content runs a vision model on this machine, so
+          nothing is uploaded to get a name and it keeps working offline. The
+          model is about 1.7 GB and is downloaded once.
+        </p>
+        <div id="namer-progress" hidden>
+          <div class="bar"><span></span></div>
+          <small id="namer-detail" class="muted"></small>
+        </div>
+        <div class="sheet-actions">
+          <button type="button" id="namer-cancel" class="ghost">Not now</button>
+          <button type="button" id="namer-start" class="primary">Download</button>
+        </div>
+      </div>
+    </dialog>
+
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
     <script type="module" src="./main.js"></script>
   </body>

@@ -611,3 +611,34 @@ button:disabled {
     flex: 1 1 calc(50% - 4px);
   }
 }
+
+/* --- naming model download ------------------------------------------------ */
+
+#namer-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+/* An author `display` beats the user agent's rule for [hidden], so it has to be
+   said again here or the empty bar shows before the download starts. */
+#namer-progress[hidden] {
+  display: none;
+}
+
+#namer-progress .bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+#namer-progress .bar span {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 120ms linear;
+}

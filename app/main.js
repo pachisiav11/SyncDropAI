@@ -436,6 +436,50 @@ function setupSettings() {
   });
 }
 
+// --- the naming model -------------------------------------------------------
+
+function formatBytes(bytes) {
+  const gb = bytes / (1024 * 1024 * 1024);
+  return gb >= 1 ? `${gb.toFixed(2)} GB` : `${Math.round(bytes / (1024 * 1024))} MB`;
+}
+
+function offerNamerDownload() {
+  el("namer-progress").hidden = true;
+  el("namer-start").disabled = false;
+  el("namer-detail").textContent = "";
+  el("namer-dialog").showModal();
+}
+
+function setupNamer() {
+  const dialog = el("namer-dialog");
+  const bar = dialog.querySelector("#namer-progress .bar span");
+  const detail = el("namer-detail");
+
+  host.onNamerProgress(({ done, total }) => {
+    bar.style.width = `${total > 0 ? Math.min(100, (done / total) * 100) : 0}%`;
+    detail.textContent = `${formatBytes(done)} of ${formatBytes(total)}`;
+  });
+
+  el("namer-cancel").addEventListener("click", () => dialog.close());
+
+  el("namer-start").addEventListener("click", async () => {
+    el("namer-start").disabled = true;
+    el("namer-progress").hidden = false;
+    detail.textContent = "Starting…";
+    try {
+      await host.fetchNamer();
+      dialog.close();
+      el("rename-toggle").checked = true;
+      state.autoName = true;
+      await host.storage.setItem(RENAME_KEY, "true");
+      ui.toast("Naming model ready. Files are now named by their content.", 4200);
+    } catch (error) {
+      detail.textContent = error?.message ?? String(error);
+      el("namer-start").disabled = false;
+    }
+  });
+}
+
 // --- file picking -----------------------------------------------------------
 
 function setupPicker() {
@@ -492,14 +536,14 @@ function setupPicker() {
     ? "Content naming runs a local model, so it is only available on the desktop app"
     : "Names files from their content using a model running on this machine";
   toggle.addEventListener("change", async () => {
-    // Switching this on is a promise the model has to keep. Checking here means
-    // an absent model is a sentence on screen, rather than files quietly
-    // arriving under their old names with nothing to explain why.
+    // Switching this on is a promise the model has to keep. The weights are
+    // fetched once and are not part of the installer, so the first time anyone
+    // asks for this the honest answer is to say what it costs and offer it.
     if (toggle.checked && !(await host.namerReady())) {
       toggle.checked = false;
       state.autoName = false;
       await host.storage.setItem(RENAME_KEY, "false");
-      ui.toast("No local model answered. Naming needs Ollama running on this machine.", 4200);
+      offerNamerDownload();
       return;
     }
     state.autoName = toggle.checked;
@@ -570,6 +614,7 @@ async function boot() {
   setupPairing();
   setupSettings();
   setupPicker();
+  setupNamer();
   refresh();
 
   await host.sweep?.();

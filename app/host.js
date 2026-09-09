@@ -137,7 +137,13 @@ function tauriHost() {
       return invoke("device_name").catch(() => defaultDeviceName("windows"));
     },
 
-    namerReady: () => invoke("namer_ready").catch(() => false)
+    namerReady: () => invoke("namer_ready").catch(() => false),
+
+    fetchNamer: () => invoke("namer_fetch"),
+
+    onNamerProgress(handler) {
+      globalThis.__TAURI__?.event?.listen?.("namer-progress", (event) => handler(event.payload));
+    }
   };
 }
 
@@ -160,6 +166,8 @@ function browserHost(platform) {
     // model, and a phone should not be asked to.
     suggestName: async () => null,
     namerReady: async () => false,
+    fetchNamer: async () => {},
+    onNamerProgress: () => {},
     // The Android build registers a share-sheet plugin; a plain browser tab has
     // nothing to take, and the installed PWA gets its shares through the
     // service worker instead.

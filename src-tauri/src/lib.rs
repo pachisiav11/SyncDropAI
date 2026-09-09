@@ -1,5 +1,6 @@
 mod files;
 mod inbox;
+mod llama;
 mod naming;
 mod vault;
 
@@ -42,6 +43,7 @@ pub fn run() {
             inbox::inbox_read,
             naming::suggest_name,
             naming::namer_ready,
+            llama::namer_fetch,
         ])
         .run(tauri::generate_context!())
         .expect("SyncDrop failed to start");

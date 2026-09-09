@@ -1,9 +1,8 @@
-//! Naming a file from its content, using a vision model served by Ollama on
-//! this machine.
+//! Naming a file from its content, using the vision model in [`crate::llama`].
 //!
 //! This runs on the sending side, before the bytes go anywhere. Nothing is
-//! uploaded to get a name, the model call costs nothing, and if Ollama is not
-//! running the send simply keeps the original filename.
+//! uploaded to get a name, the model runs on this machine, and if it is not
+//! there the send simply keeps the original filename.
 //!
 //! Behaviour matches the JavaScript namer the CLI uses, including the two
 //! findings that made it work on CPU-only hardware: reasoning must be disabled,
@@ -13,7 +12,6 @@
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use image::imageops::FilterType;
-use serde_json::json;
 use tauri::ipc::{InvokeBody, Request};
 
 const IMAGE_PROMPT: &str = "Describe what is in this image in 3 to 6 words, as specifically as you can. Include any app, brand, product, or document name you can read. Reply with the description only. No punctuation, no quotes, and never use the words image, photo, picture, screenshot or file.";
@@ -24,43 +22,12 @@ fn env_or(key: &str, fallback: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| fallback.to_string())
 }
 
-fn ollama_host() -> String {
-    env_or("OLLAMA_HOST", "http://127.0.0.1:11434")
-        .trim_end_matches('/')
-        .to_string()
-}
-
 fn max_edge() -> u32 {
     env_or("SYNCDROP_NAMER_MAX_EDGE", "512").parse().unwrap_or(512)
 }
 
-fn describe(prompt: &str, images: Vec<String>) -> Result<String, String> {
-    let payload = json!({
-        "model": env_or("SYNCDROP_NAMER_MODEL", "minicpm-v4.6"),
-        "prompt": prompt,
-        "images": images,
-        // Without this the reasoning backbone emits its chain of thought
-        // instead of an answer.
-        "think": false,
-        "stream": false,
-        "options": { "temperature": 0.1, "num_predict": 40 }
-    });
-
-    let mut response = ureq::post(format!("{}/api/generate", ollama_host()))
-        .send_json(&payload)
-        .map_err(|e| format!("Ollama is not reachable: {e}"))?;
-
-    let body: serde_json::Value = response
-        .body_mut()
-        .read_json()
-        .map_err(|e| format!("Ollama returned something unreadable: {e}"))?;
-
-    Ok(body
-        .get("response")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .trim()
-        .to_string())
+fn describe(prompt: &str, image: Option<String>) -> Result<String, String> {
+    crate::llama::describe(prompt, image)
 }
 
 /// Downscale before sending: the vision encoder tiles the image, so input
@@ -168,16 +135,13 @@ pub async fn suggest_name(request: Request<'_>) -> Result<Option<String>, String
     name_for(bytes, &name, &mime)
 }
 
-/// Whether the model is there to be asked. The toggle in the UI promises
-/// something only this can deliver, so it is checked at the moment somebody
-/// switches it on rather than discovered as silence when a file arrives with
-/// its old name.
+/// Whether naming can run at all: the server ships with the app, but the
+/// weights are fetched once and until they are here there is nothing to ask.
+/// Checked when the toggle is switched on, so an absent model is a sentence on
+/// screen rather than files quietly keeping their old names.
 #[tauri::command]
 pub fn namer_ready() -> bool {
-    ureq::get(format!("{}/api/tags", ollama_host()))
-        .call()
-        .map(|r| r.status().is_success())
-        .unwrap_or(false)
+    crate::llama::server_available() && crate::llama::models_present()
 }
 
 /// The whole feature, minus the Tauri request wrapper. Kept separate so it can
@@ -185,14 +149,14 @@ pub fn namer_ready() -> bool {
 pub fn name_for(bytes: &[u8], name: &str, mime: &str) -> Result<Option<String>, String> {
     let description = match mime {
         "image/png" | "image/jpeg" | "image/bmp" | "image/tiff" | "image/gif" => {
-            describe(IMAGE_PROMPT, vec![to_model_image(bytes)?])?
+            describe(IMAGE_PROMPT, Some(to_model_image(bytes)?))?
         }
         "text/html" | "application/xhtml+xml" | "image/svg+xml" => {
             let text = text_from_markup(&String::from_utf8_lossy(bytes));
             if text.is_empty() {
                 return Ok(None);
             }
-            describe(&format!("{TEXT_PROMPT}{text}"), vec![])?
+            describe(&format!("{TEXT_PROMPT}{text}"), None)?
         }
         other if other.starts_with("text/") || matches!(other, "application/json" | "application/xml" | "application/yaml" | "application/javascript" | "application/sql") => {
             let raw = String::from_utf8_lossy(bytes);
@@ -200,7 +164,7 @@ pub fn name_for(bytes: &[u8], name: &str, mime: &str) -> Result<Option<String>, 
             if text.is_empty() {
                 return Ok(None);
             }
-            describe(&format!("{TEXT_PROMPT}{text}"), vec![])?
+            describe(&format!("{TEXT_PROMPT}{text}"), None)?
         }
         // Archives, video, and image formats we cannot decode keep their name.
         _ => return Ok(None),
@@ -243,11 +207,11 @@ mod tests {
     }
 
     // Runs against the model on this machine. Skips itself rather than failing
-    // when Ollama is not running, because naming is optional by design.
+    // when the model is not on this machine, because naming is optional.
     #[test]
     fn the_local_model_names_a_document_from_its_text() {
         if !namer_ready() {
-            eprintln!("skipped: no Ollama on {}", ollama_host());
+            eprintln!("skipped: the naming model is not on this machine");
             return;
         }
         let letter = "INVOICE\nNorthwind Plumbing Ltd\nInvoice number 4471\nDate 14 March\n\
@@ -274,7 +238,7 @@ mod tests {
     #[test]
     fn the_local_model_names_an_image_from_what_is_in_it() {
         if !namer_ready() {
-            eprintln!("skipped: no Ollama on {}", ollama_host());
+            eprintln!("skipped: the naming model is not on this machine");
             return;
         }
         // A red circle on white. Small, but it is a real decode-resize-encode
