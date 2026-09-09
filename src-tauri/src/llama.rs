@@ -393,9 +393,11 @@ pub fn describe(prompt: &str, image: Option<String>) -> Result<String, String> {
         *guard = Some(start()?);
         start_reaper();
     }
-    let running = guard.as_mut().expect("just started");
-    running.used = Instant::now();
-    let port = running.port;
+    let port = {
+        let running = guard.as_mut().expect("just started");
+        running.used = Instant::now();
+        running.port
+    };
 
     let content = match image {
         Some(base64) => serde_json::json!([
@@ -415,10 +417,22 @@ pub fn describe(prompt: &str, image: Option<String>) -> Result<String, String> {
         "chat_template_kwargs": {"enable_thinking": false},
     });
 
-    let mut response = agent(REQUEST_TIMEOUT)
+    let answer = agent(REQUEST_TIMEOUT)
         .post(&format!("http://127.0.0.1:{port}/v1/chat/completions"))
-        .send_json(&body)
-        .map_err(|e| format!("The model did not answer: {e}"))?;
+        .send_json(&body);
+
+    // A server that has died stays dead, and a handle to it would fail every
+    // later call in the same way. Forget it so the next name starts a new one.
+    let mut response = match answer {
+        Ok(response) => response,
+        Err(e) => {
+            if let Some(mut dead) = guard.take() {
+                let _ = dead.child.kill();
+                let _ = dead.child.wait();
+            }
+            return Err(format!("The model did not answer: {e}"));
+        }
+    };
 
     let parsed: serde_json::Value = response
         .body_mut()

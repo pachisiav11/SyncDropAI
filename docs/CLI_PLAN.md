@@ -33,8 +33,9 @@ for implementing the CLI — not a design doc to leave unfinished, build it.
   content with a local vision model. Uploads never call a naming API.
 
 ### `syncdrop autoname`
-- Names files awaiting AI rename, reading their content with a local vision
-  model served by Ollama (default `minicpm-v4.6`). Zero API cost.
+- Names files awaiting AI rename, reading their content with the MiniCPM-V 4.6
+  vision model that ships with SyncDrop, run by the bundled llama.cpp server.
+  Zero API cost, and nothing to install separately.
 - `--limit <n>`: max files to name in one pass (default 25).
 - Files whose content can't be identified (unsupported type, scanned PDF, model
   returned nothing) simply keep their original name — never a UUID.
