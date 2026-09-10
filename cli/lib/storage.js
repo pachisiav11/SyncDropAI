@@ -10,6 +10,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const LOCAL_SERVER = "http://localhost:8787";
 
 export const CONFIG_DIR = path.join(os.homedir(), ".syncdrop");
 const VAULT_DIR = path.join(CONFIG_DIR, "vault");
@@ -66,6 +70,26 @@ export function writeConfig(patch) {
   return next;
 }
 
+// Vite compiles SYNCDROP_SERVER into the app builds, which is how an installed
+// app knows where the relay is without anyone typing an address. The CLI is not
+// built, so it reads the same file rather than keeping a second copy of the
+// address that can drift. Without this every command falls back to a development
+// server nobody is running and waits on a socket that never opens.
+function builtInServer() {
+  try {
+    const setting = fs
+      .readFileSync(path.join(PACKAGE_ROOT, ".env"), "utf8")
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("SYNCDROP_SERVER="));
+    if (!setting) return "";
+    // Vite strips the quotes this file is allowed to carry, so this has to too,
+    // or the address arrives with a quotation mark inside it.
+    return setting.slice("SYNCDROP_SERVER=".length).trim().replace(/^(["'])(.*)\1$/, "$2");
+  } catch {
+    return "";
+  }
+}
+
 export function serverUrl() {
-  return process.env.SYNCDROP_SERVER || readConfig().server || "http://localhost:8787";
+  return process.env.SYNCDROP_SERVER || readConfig().server || builtInServer() || LOCAL_SERVER;
 }

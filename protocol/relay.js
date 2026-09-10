@@ -224,7 +224,20 @@ export async function collectMailbox({
       // info carries its own id (the blob id); the mailbox entry id is what
       // the progress events used, so it has to win or the UI shows two rows
       // for one transfer.
-      onEvent({ type: "collected", ...received.info, id: entry.id, from: peer.deviceId, path: received.path });
+      // Both, because the two sinks answer in different currencies: a directory
+      // sink has written the file and reports where, while a browser sink holds
+      // it in storage the page owns and hands back the handle. Carrying only the
+      // path left every relayed file unreachable in the app - nothing to save
+      // automatically, and no Save button either, since that is drawn from the
+      // handle this line used to drop.
+      onEvent({
+        type: "collected",
+        ...received.info,
+        id: entry.id,
+        from: peer.deviceId,
+        path: received.path,
+        result: received.result
+      });
     } catch (error) {
       onEvent({ type: "failed", id: entry.id, from: peer.deviceId, error: error.message });
     }

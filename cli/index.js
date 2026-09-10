@@ -17,9 +17,12 @@ import { openVault } from "../protocol/vault.js";
 import { formatDeviceId } from "../protocol/identity.js";
 import { formatBytes } from "../protocol/util.js";
 import { directorySink, fileSource } from "./lib/nodeio.js";
+import { fetchModels, modelDir, modelsPresent, namerReady, serverBinary } from "./lib/llama.js";
 import { fileStorage, readConfig, serverUrl, writeConfig } from "./lib/storage.js";
 
 const VERSION = "2.0.0";
+const CONNECT_TIMEOUT_MS = 15000;
+const COLLECT_TIMEOUT_MS = 120000;
 
 function fail(message) {
   console.error(message);
@@ -31,7 +34,7 @@ function defaultName() {
   return readConfig().name || machine + " (CLI)";
 }
 
-async function connectClient({ quiet = true, downloadDir } = {}) {
+async function connectClient({ quiet = true, downloadDir, onCollected } = {}) {
   const vault = await openVault(fileStorage(), { name: defaultName(), platform: "cli" });
 
   const client = createSyncDrop({
@@ -39,12 +42,32 @@ async function connectClient({ quiet = true, downloadDir } = {}) {
     serverUrl: serverUrl(),
     createSink: directorySink(downloadDir ?? readConfig().downloads ?? process.cwd()),
     onEvent: (event) => {
+      if (event.type === "collected") onCollected?.(event);
       if (quiet) return;
       if (event.type === "collected") console.log("  received " + event.name + " -> " + event.path);
       if (event.type === "discarded") console.log("  discarded an envelope: " + event.reason);
       if (event.type === "failed") console.log("  failed: " + event.error);
     }
   });
+
+  // The reconnect loop never gives up, which is right for a window that stays
+  // open and wrong for a command that has to answer. The deadline covers the
+  // connection only: collecting what is waiting comes after it, and a large file
+  // is allowed to take as long as it takes.
+  try {
+    await Promise.race([
+      client.signaling.connect(),
+      new Promise((_, reject) => {
+        setTimeout(
+          () => reject(new Error(`No answer from ${serverUrl()} after 15 seconds. Check the address with: syncdrop config server`)),
+          CONNECT_TIMEOUT_MS
+        ).unref();
+      })
+    ]);
+  } catch (error) {
+    client.stop();
+    throw error;
+  }
 
   await client.start();
   return { client, vault };
@@ -146,6 +169,14 @@ program
   .requiredOption("-t, --to <device>", "device name or fingerprint")
   .option("--rename", "name each file from its content using the local model")
   .action(async (files, options) => {
+    // Said once, before anything is sent. The per-file fallback below is silent
+    // by design, and a whole batch keeping its own names with no explanation
+    // reads as a flag that was ignored.
+    const renaming = options.rename && namerReady();
+    if (options.rename && !renaming) {
+      console.log("  the naming model is not installed, so files keep their own names. Run: syncdrop model install");
+    }
+
     const { client } = await connectClient();
     try {
       const peer = resolveDevice(client, options.to);
@@ -153,7 +184,7 @@ program
         const source = await fileSource(filePath);
         try {
           let sending = source;
-          if (options.rename) {
+          if (renaming) {
             const suggested = await suggestName(source);
             if (suggested) sending = { ...source, name: suggested };
           }
@@ -178,8 +209,31 @@ program
   .option("-w, --watch", "stay running and collect as things arrive")
   .action(async (options) => {
     const downloadDir = path.resolve(options.out ?? process.cwd());
-    const { client } = await connectClient({ quiet: false, downloadDir });
-    const collected = await client.collect();
+    const collected = [];
+    // Connecting empties the mailbox on the way in, so the files are already
+    // down by the time this command gets to ask. Counting the return of a second
+    // pass reported nothing collected on the run that had just collected them
+    // all, which read as a command that had failed silently.
+    const { client } = await connectClient({
+      quiet: false,
+      downloadDir,
+      onCollected: (event) => collected.push(event)
+    });
+
+    // The mailbox is emptied by whichever pass gets there first: connecting
+    // starts one, and so does the server saying there is mail. A collection
+    // already running answers an overlapping call with nothing rather than
+    // joining it, so a single pass here reported none collected on the very run
+    // that was collecting them. Wait for the mailbox itself to empty instead.
+    // Envelopes are acked only once their bytes are written, so an empty
+    // mailbox means the files are down.
+    const deadline = Date.now() + COLLECT_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await client.collect();
+      if ((await client.api.listMail()).length === 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+
     console.log("Collected " + collected.length + " file(s) into " + downloadDir);
 
     if (!options.watch) {
@@ -206,6 +260,54 @@ program
       fail(error.message);
     } finally {
       client.stop();
+    }
+  });
+
+program
+  .command("model [action]")
+  .description("Check the local naming model, or install it: status, install")
+  .action(async (action = "status") => {
+    if (!["status", "install"].includes(action)) {
+      return fail("Unknown action " + action + ". Try: status, install");
+    }
+
+    if (action === "status") {
+      console.log("  weights  " + (modelsPresent() ? "present" : "missing ") + "  " + modelDir());
+      console.log("  server   " + (serverBinary() ?? "not in this checkout"));
+      console.log(
+        namerReady()
+          ? "\nReady. Add --rename to a send to name files by what is in them."
+          : "\nNot ready. Run: syncdrop model install"
+      );
+      return;
+    }
+
+    if (!serverBinary()) {
+      return fail("llama-server is not in this checkout, so there would be nothing to run the weights.");
+    }
+    if (modelsPresent()) {
+      console.log("Already installed in " + modelDir());
+      return;
+    }
+
+    // Two size probes have to answer before the first byte arrives, so name the
+    // wait. 1.7 GB against a line that never changes reads as a hang.
+    console.log("Asking Hugging Face how large the model is...");
+    let last = 0;
+    try {
+      await fetchModels((done, total) => {
+        const now = Date.now();
+        if (now - last < 200 && done < total) return;
+        last = now;
+        const line = "  " + Math.round((done / total) * 100) + "%  " + formatBytes(done) + " of " + formatBytes(total);
+        if (process.stdout.isTTY) process.stdout.write("\r" + line + "   ");
+        else console.log(line);
+      });
+      if (process.stdout.isTTY) process.stdout.write("\n");
+      console.log("Installed in " + modelDir());
+    } catch (error) {
+      if (process.stdout.isTTY) process.stdout.write("\n");
+      fail(error.message);
     }
   });
 

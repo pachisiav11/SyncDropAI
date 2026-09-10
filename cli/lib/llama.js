@@ -9,11 +9,17 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..", "..");
 
+// Kept the same as REPO, MODEL_FILE and MMPROJ_FILE on the Rust side. Both
+// download into the one directory below, so whichever of the two fetches the
+// weights first, the other finds them already there.
+const REPO = "https://huggingface.co/openbmb/MiniCPM-V-4.6-gguf/resolve/main";
 const MODEL_FILE = "MiniCPM-V-4_6-Q6_K.gguf";
 const MMPROJ_FILE = "mmproj-model-f16.gguf";
 const STARTUP_TIMEOUT_MS = 180000;
@@ -51,6 +57,73 @@ export function modelsPresent() {
 
 export function namerReady() {
   return Boolean(serverBinary()) && modelsPresent();
+}
+
+async function contentLength(name) {
+  const response = await fetch(`${REPO}/${name}`, {
+    method: "HEAD",
+    signal: AbortSignal.timeout(30000)
+  });
+  if (!response.ok) {
+    throw new Error(`Cannot reach Hugging Face for ${name}: ${response.status}`);
+  }
+  const size = Number(response.headers.get("content-length"));
+  if (!Number.isFinite(size) || size <= 0) {
+    throw new Error(`Hugging Face did not say how large ${name} is`);
+  }
+  return size;
+}
+
+async function downloadOne(name, target, size, onChunk) {
+  // Written beside the target and renamed at the end, so an interrupted
+  // download can never be mistaken for a usable model.
+  const part = `${target}.part`;
+  const response = await fetch(`${REPO}/${name}`);
+  if (!response.ok) throw new Error(`Cannot download ${name}: ${response.status}`);
+
+  let written = 0;
+  await pipeline(Readable.fromWeb(response.body), async function* (chunks) {
+    for await (const chunk of chunks) {
+      written += chunk.length;
+      onChunk(chunk.length);
+      yield chunk;
+    }
+  }, fs.createWriteStream(part));
+
+  if (written !== size) {
+    fs.rmSync(part, { force: true });
+    throw new Error(`${name} arrived incomplete (${written} of ${size} bytes)`);
+  }
+  fs.renameSync(part, target);
+}
+
+/// Download whichever weights are absent, reporting bytes as they land.
+export async function fetchModels(onProgress = () => {}) {
+  const dir = modelDir();
+  fs.mkdirSync(dir, { recursive: true });
+
+  const missing = [MODEL_FILE, MMPROJ_FILE]
+    .map((name) => ({ name, target: path.join(dir, name) }))
+    .filter((file) => !fs.existsSync(file.target));
+  if (missing.length === 0) return dir;
+
+  // Both sizes are needed before the first byte, or the count jumps when the
+  // second file starts.
+  let total = 0;
+  for (const file of missing) {
+    file.size = await contentLength(file.name);
+    total += file.size;
+  }
+
+  let done = 0;
+  onProgress(0, total);
+  for (const file of missing) {
+    await downloadOne(file.name, file.target, file.size, (bytes) => {
+      done += bytes;
+      onProgress(done, total);
+    });
+  }
+  return dir;
 }
 
 function freePort() {

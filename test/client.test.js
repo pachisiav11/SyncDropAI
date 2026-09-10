@@ -126,6 +126,11 @@ test("client: pairing, presence, relay fallback", async (t) => {
     const event = await waitFor(phoneInbox, (e) => e.name === "notes.md");
     assert.equal(event.type, "collected");
     assert.equal(event.via, "relay");
+    // A sink inside a page has no path to report, only the file it is holding.
+    // While this event carried the path alone, every relayed file reached the
+    // app and stopped there: nothing saved itself, and no Save button appeared,
+    // because both are drawn from this.
+    assert.ok(event.result, "the collected event carries what the sink produced");
     assert.deepEqual(await phone.api.listMail(), [], "the envelope is acked once written");
   });
 
