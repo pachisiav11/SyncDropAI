@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The window talks to this app's own commands, which the ACL always permits, plus the core event bridge, which it does not. Without this file listen() is denied at the IPC layer and every push from Rust - download progress, a file arriving from Send to - is dropped in silence.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

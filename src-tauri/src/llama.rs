@@ -15,6 +15,7 @@
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -447,20 +448,58 @@ pub fn describe(prompt: &str, image: Option<String>) -> Result<String, String> {
         .to_string())
 }
 
+// The same numbers the event carries, kept where a caller can come and ask for
+// them. The event is the fast path; this is what makes the progress bar
+// survive the event never arriving, which is exactly how a stuck "Starting…"
+// happened once already.
+static DONE: AtomicU64 = AtomicU64::new(0);
+static TOTAL: AtomicU64 = AtomicU64::new(0);
+static RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// Bytes fetched, bytes expected, and whether a download is still going.
+#[tauri::command]
+pub fn namer_progress() -> serde_json::Value {
+    serde_json::json!({
+        "done": DONE.load(Ordering::Relaxed),
+        "total": TOTAL.load(Ordering::Relaxed),
+        "running": RUNNING.load(Ordering::Relaxed),
+    })
+}
+
 /// Fetch the weights, reporting progress to the window as they arrive.
 ///
 /// Blocking work on a blocking thread: this moves well over a gigabyte and must
 /// not sit on the async pool that also answers the app's own commands.
 #[tauri::command]
 pub async fn namer_fetch(app: tauri::AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    if models_present() {
+        return Ok(());
+    }
+    if RUNNING.swap(true, Ordering::SeqCst) {
+        return Err("A download is already running".to_string());
+    }
+    DONE.store(0, Ordering::Relaxed);
+    TOTAL.store(0, Ordering::Relaxed);
+
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
         use tauri::Emitter;
+        // One event per megabyte is over a thousand IPC round trips on a file
+        // this size, and the bar cannot show that much detail anyway.
+        let mut last = Instant::now() - Duration::from_secs(1);
         fetch(|done, total| {
+            DONE.store(done, Ordering::Relaxed);
+            TOTAL.store(total, Ordering::Relaxed);
+            if last.elapsed() < Duration::from_millis(200) && done < total {
+                return;
+            }
+            last = Instant::now();
             let _ = app.emit("namer-progress", serde_json::json!({ "done": done, "total": total }));
         })
     })
-    .await
-    .map_err(|e| format!("The download could not start: {e}"))?
+    .await;
+
+    RUNNING.store(false, Ordering::SeqCst);
+    outcome.map_err(|e| format!("The download could not start: {e}"))?
 }
 
 #[cfg(test)]

@@ -447,6 +447,7 @@ function offerNamerDownload() {
   el("namer-progress").hidden = true;
   el("namer-start").disabled = false;
   el("namer-detail").textContent = "";
+  el("namer-dialog").querySelector("#namer-progress .bar span").style.width = "0%";
   el("namer-dialog").showModal();
 }
 
@@ -455,17 +456,27 @@ function setupNamer() {
   const bar = dialog.querySelector("#namer-progress .bar span");
   const detail = el("namer-detail");
 
-  host.onNamerProgress(({ done, total }) => {
-    bar.style.width = `${total > 0 ? Math.min(100, (done / total) * 100) : 0}%`;
+  const show = ({ done, total }) => {
+    if (!total) return;
+    bar.style.width = `${Math.min(100, (done / total) * 100)}%`;
     detail.textContent = `${formatBytes(done)} of ${formatBytes(total)}`;
-  });
+  };
+
+  host.onNamerProgress(show)?.catch?.(() => {});
 
   el("namer-cancel").addEventListener("click", () => dialog.close());
 
   el("namer-start").addEventListener("click", async () => {
     el("namer-start").disabled = true;
     el("namer-progress").hidden = false;
-    detail.textContent = "Starting…";
+    // Two size probes have to answer before the first byte, so name the wait
+    // rather than leaving the dialog on a word that never changes.
+    detail.textContent = "Asking Hugging Face how big the model is…";
+
+    // Asking is the backstop for being told: if the event bridge is ever
+    // unavailable again, the bar still moves instead of sitting on the line
+    // above with no way to tell a stall from a download.
+    const poll = setInterval(() => host.namerProgress().then(show).catch(() => {}), 500);
     try {
       await host.fetchNamer();
       dialog.close();
@@ -476,6 +487,8 @@ function setupNamer() {
     } catch (error) {
       detail.textContent = error?.message ?? String(error);
       el("namer-start").disabled = false;
+    } finally {
+      clearInterval(poll);
     }
   });
 }
@@ -623,8 +636,22 @@ async function boot() {
   await collectSystemShares({ announce: false });
   host.onShare(() => collectSystemShares());
 
-  if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+  // Only a real web page gets the worker. A packaged app already carries its
+  // assets, so caching them buys nothing - and it costs everything: Tauri serves
+  // the window from a custom protocol that a worker's own fetch cannot reach, so
+  // every request fails to the cache, a shell cached by the previous version is
+  // returned, and the script tag in it names a bundle this version no longer
+  // has. The window then paints the markup and runs none of the code, which
+  // looks exactly like an app whose buttons have stopped working.
+  if ("serviceWorker" in navigator && !isNative()) {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
+  } else if ("serviceWorker" in navigator) {
+    navigator.serviceWorker
+      .getRegistrations()
+      .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+      .then(() => caches.keys())
+      .then((keys) => Promise.all(keys.filter((key) => key !== "syncdrop-share").map((key) => caches.delete(key))))
+      .catch(() => {});
   }
 
   // A phone suspends the socket in the background; coming back to the app is

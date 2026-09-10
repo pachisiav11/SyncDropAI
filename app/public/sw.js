@@ -4,7 +4,7 @@
 // directly with the payload attached. So the worker parks the form data in a
 // cache, redirects to the app, and the page picks it up on load.
 
-const CACHE = "syncdrop-shell-v2";
+const CACHE = "syncdrop-shell-v3";
 const SHARE_CACHE = "syncdrop-share";
 const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon.svg"];
 
@@ -51,7 +51,11 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     fetch(request)
       .then((response) => {
-        if (response.ok && request.mode === "navigate") {
+        // The shell alone is not enough to open offline. Its script tag names a
+        // hashed bundle, and a miss on that falls through to the HTML below,
+        // which arrives as the wrong MIME type and stops the app from starting.
+        // Whatever the shell pulls in has to be kept beside it.
+        if (response.ok) {
           const copy = response.clone();
           caches.open(CACHE).then((cache) => cache.put(request, copy));
         }

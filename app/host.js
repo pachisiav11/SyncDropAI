@@ -12,6 +12,16 @@ import { windowedSource } from "../protocol/sources.js";
 
 const TAURI = () => globalThis.__TAURI__?.core?.invoke ?? null;
 
+// Subscribing is itself a core command, so it is gated by the capability file
+// rather than being local to this app. A denial comes back as a rejected
+// promise that nothing is waiting on, which is how a broken bridge used to
+// look identical to a push that had simply not happened yet.
+function listen(name, handler) {
+  const bridge = globalThis.__TAURI__?.event?.listen;
+  if (!bridge) return Promise.reject(new Error("The Tauri event bridge is missing"));
+  return bridge(name, (event) => handler(event.payload));
+}
+
 export function isTauri() {
   return Boolean(TAURI());
 }
@@ -130,7 +140,7 @@ function tauriHost() {
     },
 
     onShare(handler) {
-      globalThis.__TAURI__?.event?.listen?.("shared-files", () => handler());
+      return listen("shared-files", () => handler());
     },
 
     async deviceName() {
@@ -141,8 +151,10 @@ function tauriHost() {
 
     fetchNamer: () => invoke("namer_fetch"),
 
+    namerProgress: () => invoke("namer_progress"),
+
     onNamerProgress(handler) {
-      globalThis.__TAURI__?.event?.listen?.("namer-progress", (event) => handler(event.payload));
+      return listen("namer-progress", handler);
     }
   };
 }
@@ -167,6 +179,7 @@ function browserHost(platform) {
     suggestName: async () => null,
     namerReady: async () => false,
     fetchNamer: async () => {},
+    namerProgress: async () => ({ done: 0, total: 0, running: false }),
     onNamerProgress: () => {},
     // The Android build registers a share-sheet plugin; a plain browser tab has
     // nothing to take, and the installed PWA gets its shares through the
