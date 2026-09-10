@@ -1,18 +1,20 @@
 // Cloudflare entrypoint.
 //
 // The Worker is deliberately thin. It terminates TLS, routes a socket to the
-// Durable Object that owns the device, moves blob parts in and out of R2, and
-// hands every other request to the same createApi() that the Node host uses.
-// There is no logic here that a self-hoster does not also get.
+// Durable Object that owns the device, moves blob parts in and out of Workers
+// KV, and hands every other request to the same createApi() that the Node
+// host uses. There is no logic here that a self-hoster does not also get.
 //
-// Deploy with `npx wrangler deploy` after `npx wrangler r2 bucket create
-// syncdrop-blobs`. The app itself is served by the [assets] binding, so one
-// deploy puts the PWA and the relay on the same origin.
+// Deploy with `npx wrangler deploy` after `npx wrangler kv namespace create
+// BLOBS`. The app itself is served by the [assets] binding, so one deploy
+// puts the PWA and the relay on the same origin.
 
 import { createApi } from "../core.js";
 import { createWorkerHub, createWorkerStore } from "./store.js";
-import { RELAY_PART_SIZE } from "../../protocol/constants.js";
+import { RELAY_PART_SIZE, RELAY_TTL_DAYS } from "../../protocol/constants.js";
 import { partKey } from "./blob.js";
+
+const PART_TTL_SECONDS = RELAY_TTL_DAYS * 24 * 60 * 60;
 
 export { DeviceObject } from "./device.js";
 export { PairRoomObject } from "./room.js";
@@ -106,9 +108,9 @@ async function handlePart(request, env, store, match) {
     const length = Number(request.headers.get("content-length") ?? 0);
     if (length > MAX_PART_BYTES) return fail(413, "Part is too large");
 
-    await env.BLOBS.put(partKey(blobId, index), request.body, {
-      httpMetadata: { contentType: "application/octet-stream" }
-    });
+    const bytes = new Uint8Array(await request.arrayBuffer());
+    if (bytes.byteLength > MAX_PART_BYTES) return fail(413, "Part is too large");
+    await env.BLOBS.put(partKey(blobId, index), bytes, { expirationTtl: PART_TTL_SECONDS });
     await env.BLOB.get(env.BLOB.idFromName(blobId)).fetch("https://do/received", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -121,12 +123,12 @@ async function handlePart(request, env, store, match) {
 
   if (request.method === "GET") {
     if (token !== record.readToken) return fail(403, "Invalid read token");
-    const object = await env.BLOBS.get(partKey(blobId, index));
-    if (!object) return fail(404, "Part has not been uploaded");
-    return new Response(object.body, {
+    const bytes = await env.BLOBS.get(partKey(blobId, index), "arrayBuffer");
+    if (!bytes) return fail(404, "Part has not been uploaded");
+    return new Response(bytes, {
       headers: {
         "content-type": "application/octet-stream",
-        "content-length": String(object.size),
+        "content-length": String(bytes.byteLength),
         ...CORS
       }
     });

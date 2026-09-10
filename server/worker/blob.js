@@ -1,14 +1,16 @@
 // One Durable Object per queued blob — metadata only.
 //
-// The ciphertext itself never enters this object: parts go straight to R2 from
-// the Worker, which is what keeps an 8 MB upload off the object's single
-// thread. What lives here is the part count, the two capability tokens and the
-// tally of which indices have landed, because that tally has to be exact and
-// R2 gives no atomic counter.
+// The ciphertext itself never enters this object: parts go straight to
+// Workers KV from the Worker, which is what keeps an 8 MB upload off the
+// object's single thread. What lives here is the part count, the two
+// capability tokens and the tally of which indices have landed, because that
+// tally has to be exact and KV gives no atomic counter.
 //
 // The alarm is the whole expiry story. Instead of a nightly sweep over every
-// blob in the system, each blob knows when it dies and deletes its own R2 keys
-// on the way out. Nothing has to enumerate anything.
+// blob in the system, each blob knows when it dies and deletes its own KV
+// keys on the way out. Nothing has to enumerate anything. (Each KV value also
+// carries its own expirationTtl as a second line of defense, in case a blob's
+// alarm is ever lost.)
 
 import { RELAY_TTL_DAYS } from "../../protocol/constants.js";
 import { b64u, randomBytes } from "../../protocol/util.js";
@@ -92,12 +94,12 @@ export class BlobObject {
   async destroy() {
     const record = await this.meta();
     if (record) {
+      // KV has no bulk-delete call, so each part is its own request. The
+      // expirationTtl set at upload time means a failed delete here still
+      // self-cleans, just not on this object's schedule.
       const keys = [];
       for (let i = 0; i < record.parts; i += 1) keys.push(partKey(record.blobId, i));
-      // R2 deletes up to 1000 keys per call.
-      for (let i = 0; i < keys.length; i += 1000) {
-        await this.env.BLOBS.delete(keys.slice(i, i + 1000)).catch(() => {});
-      }
+      await Promise.all(keys.map((key) => this.env.BLOBS.delete(key).catch(() => {})));
     }
     await this.state.storage.deleteAlarm();
     await this.state.storage.deleteAll();

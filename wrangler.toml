@@ -4,13 +4,21 @@
 # the app installable and lets it talk to the relay with no CORS preflight.
 #
 # First time:
-#   npx wrangler r2 bucket create syncdrop-blobs
+#   npx wrangler kv namespace create BLOBS
+#   (paste the printed id into the kv_namespaces block below)
 #   npm run build
 #   npx wrangler deploy
 #
-# There is nothing else to provision. No database, no auth provider, no secrets:
-# devices authenticate by signing with keys they generated themselves, so there
-# is no credential on this side to configure, rotate, or leak.
+# Blob storage is Workers KV rather than R2 on purpose: KV ships in the free
+# Workers plan with no payment method on file, where R2 asks for a card before
+# it will let you create a bucket at all, even to stay inside its free tier.
+# KV's 25 MiB value limit comfortably covers an 8 MiB relay part, and its
+# per-key expirationTtl gives parts the same self-cleaning expiry R2 had.
+#
+# There is nothing else to provision. No database, no auth provider, no
+# secrets: devices authenticate by signing with keys they generated
+# themselves, so there is no credential on this side to configure, rotate, or
+# leak.
 
 name = "syncdrop"
 main = "server/worker/index.js"
@@ -22,12 +30,12 @@ binding = "ASSETS"
 # The app is a SPA; anything that is not a built file is the app shell.
 not_found_handling = "single-page-application"
 
-# Ciphertext parked for a sleeping recipient. Objects here are AES-GCM sealed to
-# a key the sender derived for one device, so the bucket holds no readable file
-# and no filename — only numbered parts.
-[[r2_buckets]]
+# Ciphertext parked for a sleeping recipient. Values here are AES-GCM sealed to
+# a key the sender derived for one device, so the namespace holds no readable
+# file and no filename — only numbered parts, each expiring on its own.
+[[kv_namespaces]]
 binding = "BLOBS"
-bucket_name = "syncdrop-blobs"
+id = "3f8588f9ede34158b3dab25f53563362"
 
 # One object per device: its sockets, its mailbox, and the peers watching it.
 [[durable_objects.bindings]]

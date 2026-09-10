@@ -334,17 +334,24 @@ worth knowing about.
 **On Cloudflare:**
 
 ```bash
-npx wrangler r2 bucket create syncdrop-blobs
+npx wrangler kv namespace create BLOBS
 npm run build
 npx wrangler deploy
 ```
 
-One deploy puts the app and the relay on the same origin. The parts live in R2;
-the state lives in Durable Objects, one per device, one per pairing room, one
-per queued transfer. Nothing is central: two devices that talk to each other
-never touch an object that a third device also touches, so adding devices adds
-objects rather than load. Each queued transfer sets its own expiry alarm and
-deletes its own bytes, so nothing has to sweep anything.
+The first command prints an id — paste it into the `[[kv_namespaces]]` block in
+`wrangler.toml` before deploying. Blob storage is Workers KV rather than R2:
+KV comes with the free Workers plan and never asks for a payment method, where
+R2 requires a card on file before it will create a bucket at all, even to stay
+on its free tier.
+
+One deploy puts the app and the relay on the same origin. The parts live in
+KV; the state lives in Durable Objects, one per device, one per pairing room,
+one per queued transfer. Nothing is central: two devices that talk to each
+other never touch an object that a third device also touches, so adding
+devices adds objects rather than load. Each queued transfer sets its own
+expiry alarm and deletes its own bytes (and each KV value carries a matching
+TTL as a backstop), so nothing has to sweep anything.
 
 The rules that decide who may read a blob or claim a mailbox entry are the same
 file (`server/core.js`) in both hosts. There is only one copy of that logic, so
@@ -374,7 +381,7 @@ npm test
 
 The suite is not made of mocks. Transfers are checked byte for byte, the
 Cloudflare host runs on the actual workerd runtime with real Durable Objects
-and a real R2 bucket, and the tests that matter most are the adversarial ones:
+and a real KV namespace, and the tests that matter most are the adversarial ones:
 a forged signature, a stale timestamp, a device reading another device's
 mailbox, a corrupted chunk in flight, a server asked to name a file it is
 holding.

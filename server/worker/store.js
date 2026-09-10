@@ -1,15 +1,21 @@
-// The store.js interface, backed by Durable Objects and R2.
+// The store.js interface, backed by Durable Objects and Workers KV.
 //
 // server/core.js does not know or care which of the three stores it is talking
 // to. That is the point of writing it this way: the rules that decide who may
 // read a blob or claim a mailbox entry are the same lines of code on a laptop,
 // on a Pi and on Cloudflare, so there is only ever one of them to get right.
 //
-// Only the blob data plane differs in shape. Parts are R2 objects written and
+// Only the blob data plane differs in shape. Parts are KV values written and
 // read by the Worker directly, so bytes never pass through a Durable Object.
+// (The Worker's own fetch handler intercepts /blob/:id/:index before it ever
+// reaches here — putPart/getPart below exist only so this store still
+// satisfies the same interface the Node host's disk store does.)
 
+import { RELAY_TTL_DAYS } from "../../protocol/constants.js";
 import { shortId } from "../../protocol/util.js";
 import { partKey } from "./blob.js";
+
+const PART_TTL_SECONDS = RELAY_TTL_DAYS * 24 * 60 * 60;
 
 const post = (stub, path, body) =>
   stub.fetch("https://do/" + path, {
@@ -76,14 +82,13 @@ export function createWorkerStore(env) {
         return record;
       },
       async putPart(blobId, index, bytes) {
-        await env.BLOBS.put(partKey(blobId, index), bytes);
+        await env.BLOBS.put(partKey(blobId, index), bytes, { expirationTtl: PART_TTL_SECONDS });
         const { record } = await readJson(await post(blob(blobId), "received", { index }));
         return record;
       },
       async getPart(blobId, index) {
-        const object = await env.BLOBS.get(partKey(blobId, index));
-        if (!object) return null;
-        return new Uint8Array(await object.arrayBuffer());
+        const buffer = await env.BLOBS.get(partKey(blobId, index), "arrayBuffer");
+        return buffer ? new Uint8Array(buffer) : null;
       },
       async complete(blobId) {
         const { record } = await readJson(await post(blob(blobId), "complete"));

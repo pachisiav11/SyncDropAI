@@ -1,9 +1,9 @@
 // The Cloudflare host, run for real.
 //
 // Miniflare boots the same workerd runtime Cloudflare runs, with real Durable
-// Objects and a real R2 bucket, and serves it over HTTP. So these are not mocks
-// of the edge: the client below is the unmodified protocol client, talking to
-// the unmodified Worker, over a socket that genuinely hibernates.
+// Objects and a real KV namespace, and serves it over HTTP. So these are not
+// mocks of the edge: the client below is the unmodified protocol client,
+// talking to the unmodified Worker, over a socket that genuinely hibernates.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -24,7 +24,7 @@ function startEdge() {
     modulesRules: [{ type: "ESModule", include: ["**/*.js"] }],
     scriptPath: "server/worker/index.js",
     compatibilityDate: "2025-04-01",
-    r2Buckets: ["BLOBS"],
+    kvNamespaces: ["BLOBS"],
     durableObjects: {
       DEVICE: { className: "DeviceObject", useSQLite: true },
       PAIR_ROOM: { className: "PairRoomObject", useSQLite: true },
@@ -163,7 +163,7 @@ test("cloudflare host: pairing, presence and relay on Durable Objects", async (t
     assert.equal(desk.isOnline(phone.identity.deviceId), true);
   });
 
-  await t.test("a file rides the relay through R2 and lands intact", async () => {
+  await t.test("a file rides the relay through KV and lands intact", async () => {
     const bytes = new Uint8Array(nodeRandomBytes(400000));
     const source = bytesSource({ name: "budget.xlsx", mime: "application/vnd.ms-excel", bytes });
     const result = await phone.send(desk.identity.deviceId, source);
@@ -215,19 +215,19 @@ test("cloudflare host: pairing, presence and relay on Durable Objects", async (t
     const secret = "salary-negotiation-notes.docx";
     await phone.send(desk.identity.deviceId, bytesSource({ name: secret, mime: "text/plain", bytes }));
 
-    // Everything the bucket holds, as the operator would see it.
-    const bucket = await edge.getR2Bucket("BLOBS");
-    const listing = await bucket.list();
-    assert.ok(listing.objects.length > 0, "there is ciphertext to inspect");
+    // Everything the namespace holds, as the operator would see it.
+    const kv = await edge.getKVNamespace("BLOBS");
+    const listing = await kv.list();
+    assert.ok(listing.keys.length > 0, "there is ciphertext to inspect");
 
     const seen = [];
-    for (const object of listing.objects) {
-      const stored = await bucket.get(object.key);
-      seen.push(new Uint8Array(await stored.arrayBuffer()));
+    for (const { name } of listing.keys) {
+      const stored = await kv.get(name, "arrayBuffer");
+      seen.push(new Uint8Array(stored));
     }
     const haystack = Buffer.concat(seen.map((part) => Buffer.from(part)));
-    assert.equal(haystack.includes(Buffer.from(secret, "utf8")), false, "the filename is not in the bucket");
-    assert.equal(haystack.includes(Buffer.from(bytes.subarray(0, 64))), false, "the content is not in the bucket");
+    assert.equal(haystack.includes(Buffer.from(secret, "utf8")), false, "the filename is not in the namespace");
+    assert.equal(haystack.includes(Buffer.from(bytes.subarray(0, 64))), false, "the content is not in the namespace");
 
     // And the routing metadata beside it names a recipient and a size, nothing else.
     const entries = await mailboxOf(serverUrl, desk.identity);

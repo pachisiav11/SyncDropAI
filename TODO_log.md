@@ -17,3 +17,4 @@
 - Added: 2026-09-09 22:51 | Completed: 2026-09-09 22:58 | Make first-run setup seamless: compile the relay address in at build time, fix the Android/Tauri origin guess, surface an unreachable relay with a one-button fix, print the LAN address on serve, allow packaged apps to reach a self-hosted relay
 - Added: 2026-09-09 23:10 | Completed: 2026-09-09 23:20 | Tell people when the naming model is absent instead of silently keeping old filenames
 - Added: 2026-09-09 23:22 | Completed: 2026-09-09 23:50 | Remove the Ollama dependency: ship llama.cpp, fetch MiniCPM-V 4.6 Q6_K weights on demand, and run the server on demand in both the desktop app and the CLI
+- Added: 2026-09-10 20:53 | Completed: 2026-09-10 21:05 | Swap relay blob storage from R2 to Workers KV (no payment method needed), deploy to Cloudflare, bake the real address into both rebuilt artifacts

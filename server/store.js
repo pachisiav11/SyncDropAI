@@ -6,7 +6,7 @@
 //
 // memory - tests and ephemeral use
 // disk   - self-hosting on a box you own
-// R2 + Durable Objects live in server/worker behind this same interface.
+// Workers KV + Durable Objects live in server/worker behind this same interface.
 
 import { RELAY_TTL_DAYS } from "../protocol/constants.js";
 import { b64u, randomBytes, shortId } from "../protocol/util.js";
