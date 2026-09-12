@@ -89,8 +89,8 @@ function tauriHost() {
 
     canAutoSave: true,
 
-    async save(result, { chunkSize = 4 * 1024 * 1024 } = {}) {
-      const token = await invoke("file_begin", { name: result.name });
+    async save(result, { chunkSize = 4 * 1024 * 1024, dir = "" } = {}) {
+      const token = await invoke("file_begin", { name: result.name, dir });
       try {
         for (let offset = 0; offset < result.size; offset += chunkSize) {
           const slice = result.file.slice(offset, Math.min(offset + chunkSize, result.size));
@@ -106,6 +106,11 @@ function tauriHost() {
     },
 
     reveal: (path) => invoke("reveal", { path }),
+
+    // Answers with the folder that would actually be used, so the settings
+    // dialog can show the default instead of an empty box and can refuse a path
+    // that is not there while it is still open.
+    resolveDownloadDir: (dir) => invoke("resolve_download_dir", { dir }),
 
     // The desktop app writes straight to the download folder, so its staging
     // area is released as each transfer completes and there is nothing to sweep.
@@ -168,10 +173,12 @@ function browserHost(platform) {
     createSink: createBrowserSink(),
     canAutoSave: false,
     async save(result) {
-      saveToDisk(result);
-      return null;
+      return saveToDisk(result);
     },
     reveal: async () => {},
+    // A browser and a phone put downloads where they put downloads; neither
+    // lets a page choose, so there is nothing here to configure.
+    resolveDownloadDir: async () => "",
     sweep: sweepIncoming,
     // No local model in a browser or on the phone; the sender keeps the
     // original filename. Naming is a laptop feature by design: it runs a vision

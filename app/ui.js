@@ -236,7 +236,9 @@ export function renderActivity(state, { onSave, onReveal, onRetry }) {
       save.addEventListener("click", () => onSave(transfer));
       meta.append(save);
     }
-    if (transfer.savedPath) {
+    // A phone can put a file in Downloads but cannot open a folder to show it,
+    // so this button belongs only where it leads somewhere.
+    if (transfer.savedPath && state.canReveal) {
       const reveal = document.createElement("button");
       reveal.type = "button";
       reveal.className = "ghost";

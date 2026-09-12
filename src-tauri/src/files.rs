@@ -67,12 +67,41 @@ fn token() -> String {
     format!("dl{}", NEXT.fetch_add(1, Ordering::Relaxed))
 }
 
-#[tauri::command]
-pub fn file_begin(name: String, state: State<'_, Downloads>) -> Result<String, String> {
+/// Where files land, given whatever folder the window has saved. An empty
+/// setting means the system download folder, which is what it was before this
+/// could be changed at all.
+///
+/// A folder that is not there is an error rather than something to create: the
+/// setting is typed by hand, and a typo should say so instead of quietly
+/// building a directory nobody meant and filing everything in it.
+fn target_dir(chosen: Option<String>) -> Result<PathBuf, String> {
+    let chosen = chosen.unwrap_or_default();
+    let trimmed = chosen.trim();
+    if !trimmed.is_empty() {
+        let dir = PathBuf::from(trimmed);
+        if !dir.is_dir() {
+            return Err(format!("{} is not a folder on this machine", dir.display()));
+        }
+        return Ok(dir);
+    }
+
     let dir = dirs::download_dir()
         .or_else(dirs::home_dir)
         .ok_or_else(|| "Could not find a Downloads folder".to_string())?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// The folder that would be used, so the settings dialog can show the default
+/// rather than an empty box, and can refuse a bad path while it is still open.
+#[tauri::command]
+pub fn resolve_download_dir(dir: Option<String>) -> Result<String, String> {
+    Ok(target_dir(dir)?.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn file_begin(name: String, dir: Option<String>, state: State<'_, Downloads>) -> Result<String, String> {
+    let dir = target_dir(dir)?;
 
     let target = unique_path(&dir, &sanitize(&name));
     let temp = target.with_extension(format!(

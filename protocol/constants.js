@@ -18,7 +18,7 @@ export const CONTEXT = {
   mailbox: "syncdrop/v2/mailbox"
 };
 
-export const PAIR_CODE_CHARS = 12;
+export const PAIR_CODE_CHARS = 6;
 // PBKDF2 rounds for turning a pairing code into a rendezvous room id. The room
 // id is visible to the signaling server, so this cost is what stops an operator
 // from dictionary-attacking the 60-bit code offline and joining the exchange.

@@ -71,13 +71,13 @@
           <button type="button" class="tab" data-tab="enter" role="tab">Enter a code</button>
         </div>
         <div id="pair-show" class="tab-panel">
-          <div id="pair-code" class="code">------------</div>
+          <div id="pair-code" class="code">------</div>
           <p class="muted small">Type this on the other device. It expires in five minutes.</p>
         </div>
         <div id="pair-enter" class="tab-panel" hidden>
           <label class="field">
             <span>Code from the other device</span>
-            <input id="pair-input" inputmode="latin" autocomplete="off" spellcheck="false" placeholder="ABCD-EFGH-JKMN" />
+            <input id="pair-input" inputmode="numeric" pattern="[0-9 -]*" autocomplete="one-time-code" spellcheck="false" maxlength="7" placeholder="123-456" />
           </label>
         </div>
         <p id="pair-status" class="pair-status" role="status"></p>
@@ -99,6 +99,11 @@
           <span>Server</span>
           <input id="server-url" autocomplete="off" spellcheck="false" />
           <small class="muted">Rendezvous and relay. Files travel directly whenever both devices are reachable.</small>
+        </label>
+        <label class="field" id="download-field">
+          <span>Save files to</span>
+          <input id="download-dir" autocomplete="off" spellcheck="false" />
+          <small class="muted">Paste a folder path. Leave it as it is to keep using the system download folder.</small>
         </label>
         <div class="field">
           <span>Device fingerprint</span>

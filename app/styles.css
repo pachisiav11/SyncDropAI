@@ -696,3 +696,10 @@ button:disabled {
 .check[hidden] {
   display: none;
 }
+
+/* Same reason as the naming switch above: a grid `display` wins over the user
+   agent's [hidden], so the download folder has to be hidden explicitly on the
+   hosts that cannot choose one. */
+.field[hidden] {
+  display: none;
+}

@@ -63,6 +63,7 @@ pub fn run() {
             vault::vault_clear,
             vault::device_name,
             files::file_begin,
+            files::resolve_download_dir,
             files::file_append,
             files::file_finish,
             files::file_abort,

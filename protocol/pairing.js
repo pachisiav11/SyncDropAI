@@ -16,25 +16,41 @@ import { importPeer, publicRecord, signContext, verifyContext } from "./identity
 import { b64u, base32, canonicalBytes, equalBytes, groupCode, randomBytes, utf8 } from "./util.js";
 
 export function generatePairingCode() {
-  // 12 Crockford characters = 60 bits. Read aloud in three groups of four.
-  return base32(randomBytes(8)).slice(0, PAIR_CODE_CHARS);
+  // Six digits: short enough to read across a room and to type on a phone
+  // keypad, which is the whole job of this code.
+  //
+  // It is 20 bits rather than the 60 it used to be, and that is a deliberate
+  // trade. What still protects it: the room id is a 210,000-round PBKDF2 over
+  // the code, so an attacker cannot even find the room without doing a full
+  // derivation per guess; every guess also costs a request; the code lives for
+  // five minutes; and the room is finished the moment the two real devices
+  // confirm. A patient attacker with a lot of cores is no longer out of the
+  // question, though, which is the part to know.
+  let code = "";
+  while (code.length < PAIR_CODE_CHARS) {
+    for (const byte of randomBytes(PAIR_CODE_CHARS)) {
+      // 250 is the largest multiple of ten a byte can hold. Taking the rest
+      // modulo ten would make 0 to 5 more likely than 6 to 9.
+      if (byte >= 250) continue;
+      code += String(byte % 10);
+      if (code.length === PAIR_CODE_CHARS) break;
+    }
+  }
+  return code;
 }
 
 export function normalizePairingCode(input) {
-  const clean = String(input || "")
-    .toUpperCase()
-    .replace(/[^0-9A-Z]/g, "")
-    // Crockford aliases, so a code read off a screen survives O/0 and I/1/L.
-    .replace(/O/g, "0")
-    .replace(/[IL]/g, "1");
+  // Whatever was typed or pasted, keep the digits: a space, a dash, or the
+  // whole pairing link all arrive here.
+  const clean = String(input || "").replace(/\D/g, "");
   if (clean.length !== PAIR_CODE_CHARS) {
-    throw new Error(`A pairing code is ${PAIR_CODE_CHARS} characters; got ${clean.length}`);
+    throw new Error(`A pairing code is ${PAIR_CODE_CHARS} digits; got ${clean.length}`);
   }
   return clean;
 }
 
 export function formatPairingCode(code) {
-  return groupCode(code, 4);
+  return groupCode(code, 3);
 }
 
 export function pairingLink(code) {
@@ -43,7 +59,7 @@ export function pairingLink(code) {
 
 export function parsePairingInput(input) {
   const text = String(input || "").trim();
-  const fromLink = text.match(/[?&]c=([0-9A-Za-z]+)/);
+  const fromLink = text.match(/[?&]c=(\d+)/);
   return normalizePairingCode(fromLink ? fromLink[1] : text);
 }
 

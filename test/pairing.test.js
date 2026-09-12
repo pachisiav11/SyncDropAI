@@ -6,10 +6,20 @@ import { createIdentity } from "../protocol/identity.js";
 import { encodeChunk, decodeChunk, encodeControl, decodeControl } from "../protocol/wire.js";
 import { equalBytes, randomBytes } from "../protocol/util.js";
 
-test("pairing code normalizes ambiguous characters", () => {
-  assert.equal(pair.normalizePairingCode("abcd-efoi-1234"), "ABCDEF011234");
-  assert.equal(pair.normalizePairingCode("ABCD EF01 1234"), "ABCDEF011234");
-  assert.throws(() => pair.normalizePairingCode("TOOSHORT"), /12 characters/);
+test("a pairing code is six digits, however it was typed", () => {
+  assert.equal(pair.normalizePairingCode("123-456"), "123456");
+  assert.equal(pair.normalizePairingCode("123 456"), "123456");
+  assert.throws(() => pair.normalizePairingCode("12345"), /6 digits/);
+  assert.throws(() => pair.normalizePairingCode("1234567"), /6 digits/);
+
+  // Every digit has to be reachable, or the space is smaller than it looks.
+  const seen = new Set();
+  for (let i = 0; i < 400; i += 1) {
+    const code = pair.generatePairingCode();
+    assert.match(code, /^\d{6}$/);
+    for (const digit of code) seen.add(digit);
+  }
+  assert.equal(seen.size, 10, "all ten digits occur");
 });
 
 test("pairing link round-trips", () => {

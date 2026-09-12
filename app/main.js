@@ -11,6 +11,7 @@ import * as ui from "./ui.js";
 const SERVER_KEY = "syncdrop.server";
 const RENAME_KEY = "syncdrop.autoname";
 const HISTORY_KEY = "syncdrop.activity";
+const DOWNLOAD_KEY = "syncdrop.downloads";
 const HISTORY_LIMIT = 40;
 
 const el = (id) => document.getElementById(id);
@@ -24,7 +25,9 @@ const state = {
   peers: [],
   pending: [],
   transfers: new Map(),
-  autoName: false
+  autoName: false,
+  downloadDir: "",
+  canReveal: false
 };
 
 let host;
@@ -271,7 +274,7 @@ async function maybeAutoSave(id) {
 
   const name = state.transfers.get(id)?.name ?? transfer.name;
   try {
-    const path = await host.save(transfer.result);
+    const path = await host.save(transfer.result, { dir: state.downloadDir });
     upsert(id, { savedPath: path });
     ui.toast(`Saved ${name}`);
   } catch (error) {
@@ -362,7 +365,7 @@ const handlers = {
   },
   onSave: async (transfer) => {
     try {
-      const path = await host.save(transfer.result);
+      const path = await host.save(transfer.result, { dir: state.downloadDir });
       if (path) upsert(transfer.id, { savedPath: path });
       ui.toast(`Saved ${transfer.name}`);
     } catch (error) {
@@ -466,6 +469,18 @@ function setupPairing() {
 async function openSettings() {
   el("device-name").value = state.deviceName;
   el("server-url").value = (await host.storage.getItem(SERVER_KEY)) ?? defaultServerUrl();
+
+  // Only the desktop app decides where a file lands. A browser and a phone hand
+  // that to the system, so there is nothing here to offer them.
+  const folder = el("download-field");
+  folder.hidden = host.kind !== "tauri";
+  if (!folder.hidden) {
+    // Shown rather than left blank, so the box says where files go today even
+    // when nothing has been chosen.
+    el("download-dir").value =
+      state.downloadDir || (await host.resolveDownloadDir("").catch(() => ""));
+  }
+
   ui.renderIdentity(state);
   el("settings-dialog").showModal();
 }
@@ -481,6 +496,22 @@ function setupSettings() {
     const name = el("device-name").value.trim();
     const server = el("server-url").value.trim();
     const previous = (await host.storage.getItem(SERVER_KEY)) ?? defaultServerUrl();
+
+    if (host.kind === "tauri") {
+      const wanted = el("download-dir").value.trim();
+      const fallback = await host.resolveDownloadDir("").catch(() => "");
+      // Typing the default back in is the same as choosing nothing, and storing
+      // it would freeze today's Downloads folder into the settings for good.
+      const chosen = wanted === fallback ? "" : wanted;
+      try {
+        await host.resolveDownloadDir(chosen);
+      } catch (error) {
+        ui.toast(error?.message ?? String(error), 4200);
+        return;
+      }
+      state.downloadDir = chosen;
+      await host.storage.setItem(DOWNLOAD_KEY, chosen);
+    }
 
     if (name && name !== state.deviceName) {
       await vault.rename(name);
@@ -670,6 +701,8 @@ async function boot() {
   const serverUrl = (await host.storage.getItem(SERVER_KEY)) ?? defaultServerUrl();
   state.serverUrl = serverUrl;
   state.autoName = (await host.storage.getItem(RENAME_KEY)) === "true" && host.kind === "tauri";
+  state.downloadDir = (await host.storage.getItem(DOWNLOAD_KEY)) ?? "";
+  state.canReveal = host.kind === "tauri";
   await loadHistory();
 
   vault = await openVault(host.storage, {
