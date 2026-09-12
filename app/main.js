@@ -10,6 +10,8 @@ import * as ui from "./ui.js";
 
 const SERVER_KEY = "syncdrop.server";
 const RENAME_KEY = "syncdrop.autoname";
+const HISTORY_KEY = "syncdrop.activity";
+const HISTORY_LIMIT = 40;
 
 const el = (id) => document.getElementById(id);
 
@@ -94,7 +96,31 @@ function upsert(id, patch) {
     startedAt: Date.now()
   };
   state.transfers.set(id, { ...existing, ...patch });
+  if (patch.state === "complete" || patch.state === "failed" || patch.savedPath) saveHistory();
   refresh();
+}
+
+// The list was held in a Map and nowhere else, so a reload emptied it and took
+// the Show in folder button for every file already on disk with it. Only
+// finished rows are kept, and the sink result is deliberately not: the file it
+// points at does not survive the page either, so a restored row offers the
+// folder rather than a Save button that cannot work.
+function saveHistory() {
+  const finished = [...state.transfers.values()]
+    .filter((transfer) => transfer.state === "complete" || transfer.state === "failed")
+    .slice(-HISTORY_LIMIT)
+    .map(({ result, retry, ...rest }) => rest);
+  host.storage.setItem(HISTORY_KEY, JSON.stringify(finished)).catch(() => {});
+}
+
+async function loadHistory() {
+  try {
+    for (const transfer of JSON.parse((await host.storage.getItem(HISTORY_KEY)) ?? "[]")) {
+      state.transfers.set(transfer.id, transfer);
+    }
+  } catch {
+    // A history that cannot be read is not worth saying anything about.
+  }
 }
 
 function onProtocolEvent(event) {
@@ -152,6 +178,9 @@ function onProtocolEvent(event) {
 
     case "collecting":
       upsert(event.id, {
+        // Stands in until the first chunk arrives with the real name, which is
+        // the earliest anything here can know it.
+        name: state.transfers.get(event.id)?.name || "Incoming file",
         direction: "receive",
         via: "relay",
         total: event.size ?? 0,
@@ -220,13 +249,46 @@ function onProtocolEvent(event) {
 async function maybeAutoSave(id) {
   const transfer = state.transfers.get(id);
   if (!transfer?.result || !host.canAutoSave || transfer.savedPath) return;
+
+  // Naming runs wherever the model is, and for a file coming off a phone that is
+  // this machine. Doing it only on the way out meant everything the phone sent
+  // kept the name the phone gave it, which is the name the feature exists to
+  // replace.
+  if (state.autoName) {
+    try {
+      const suggested = await host.suggestName(arrivedSource(transfer.result));
+      if (suggested) {
+        transfer.result.name = suggested;
+        upsert(id, { name: suggested });
+      }
+    } catch {
+      if (!namingWarned) {
+        namingWarned = true;
+        ui.toast("Could not reach the naming model. Files keep their own names.", 4200);
+      }
+    }
+  }
+
+  const name = state.transfers.get(id)?.name ?? transfer.name;
   try {
     const path = await host.save(transfer.result);
     upsert(id, { savedPath: path });
-    ui.toast(`Saved ${transfer.name}`);
+    ui.toast(`Saved ${name}`);
   } catch (error) {
-    ui.toast(`Could not save ${transfer.name}: ${error.message}`);
+    ui.toast(`Could not save ${name}: ${error.message}`);
   }
+}
+
+// suggestName reads through readChunk, which is what a file on its way out
+// offers. A file that has arrived is a blob instead, so this is the adapter.
+function arrivedSource(result) {
+  return {
+    name: result.name,
+    mime: result.mime,
+    size: result.size,
+    readChunk: async (offset, length) =>
+      new Uint8Array(await result.file.slice(offset, offset + length).arrayBuffer())
+  };
 }
 
 async function sendTo(deviceId) {
@@ -539,15 +601,21 @@ function setupPicker() {
         state.transfers.delete(id);
       }
     }
+    saveHistory();
     refresh();
   });
 
   const toggle = el("rename-toggle");
+  // Naming reads the file with a vision model running on this machine, and a
+  // phone has none to run. A switch that can never be moved only raises the
+  // question of why not, so on those hosts the control is absent rather than
+  // greyed out.
+  if (host.kind !== "tauri") {
+    toggle.closest("label").hidden = true;
+    return;
+  }
   toggle.checked = state.autoName;
-  toggle.disabled = host.kind !== "tauri";
-  toggle.parentElement.title = toggle.disabled
-    ? "Content naming runs a local model, so it is only available on the desktop app"
-    : "Names files from their content using a model running on this machine";
+  toggle.parentElement.title = "Names files from their content using a model running on this machine";
   toggle.addEventListener("change", async () => {
     // Switching this on is a promise the model has to keep. The weights are
     // fetched once and are not part of the installer, so the first time anyone
@@ -602,6 +670,7 @@ async function boot() {
   const serverUrl = (await host.storage.getItem(SERVER_KEY)) ?? defaultServerUrl();
   state.serverUrl = serverUrl;
   state.autoName = (await host.storage.getItem(RENAME_KEY)) === "true" && host.kind === "tauri";
+  await loadHistory();
 
   vault = await openVault(host.storage, {
     name: await host.deviceName(),

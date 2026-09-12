@@ -98,6 +98,33 @@ fn text_from_markup(raw: &str) -> String {
     joined.chars().take(TEXT_BUDGET).collect()
 }
 
+/// A short counter or version at the end of the original name. Mirrors
+/// keepTrailingIndex in protocol/filenames.js: a description says what is
+/// inside a file, so two files holding nearly the same thing come back with
+/// nearly the same name and the counter that told them apart is gone. Three
+/// digits at most, so that a timestamp or a camera index is never mistaken for
+/// a counter.
+fn trailing_marker(original: &str) -> String {
+    let extension = extension_of(original);
+    let base = original.strip_suffix(extension.as_str()).unwrap_or(original);
+    let chars: Vec<char> = base.chars().collect();
+
+    let mut start = chars.len();
+    while start > 0 && chars[start - 1].is_ascii_digit() {
+        start -= 1;
+    }
+    if !(1..=3).contains(&(chars.len() - start)) {
+        return String::new();
+    }
+    if start > 0 && (chars[start - 1] == 'v' || chars[start - 1] == 'V') {
+        start -= 1;
+    }
+    if start == 0 || !matches!(chars[start - 1], '-' | '_' | ' ') {
+        return String::new();
+    }
+    chars[start..].iter().collect::<String>().to_ascii_lowercase()
+}
+
 fn description_to_filename(description: &str, original: &str) -> Option<String> {
     let first = description.lines().next().unwrap_or_default();
     let cleaned = first.trim().trim_matches(|c| c == '"' || c == '\'' || c == '`').trim();
@@ -108,6 +135,18 @@ fn description_to_filename(description: &str, original: &str) -> Option<String> 
     if base.is_empty() || base.starts_with("untitled-file") {
         return None;
     }
+
+    let marker = trailing_marker(original);
+    let base = if marker.is_empty() || base.split('-').any(|part| part == marker) {
+        base
+    } else {
+        // Appended after the trim rather than before it, or a long description
+        // would push the counter straight back off the end.
+        let room = 54usize.saturating_sub(marker.len() + 1);
+        let trimmed: String = base.chars().take(room).collect();
+        format!("{}-{marker}", trimmed.trim_end_matches('-'))
+    };
+
     let candidate = format!("{base}{}", extension_of(original));
     if candidate.len() > 80 {
         return None;
@@ -190,6 +229,34 @@ mod tests {
         );
         assert_eq!(description_to_filename("   ", "a.png"), None);
         assert_eq!(description_to_filename("!!!", "a.png"), None);
+    }
+
+    #[test]
+    fn a_counter_the_description_dropped_is_carried_across() {
+        // The case this was written for: three files whose contents read alike,
+        // where the model kept the number twice and lost it on the third.
+        assert_eq!(
+            description_to_filename("tally file 1 is a list", "tally-1.txt").as_deref(),
+            Some("tally-file-1-is-a-list.txt")
+        );
+        assert_eq!(
+            description_to_filename("tally file is a list", "tally-3.txt").as_deref(),
+            Some("tally-file-is-a-list-3.txt")
+        );
+        assert_eq!(
+            description_to_filename("release notes", "notes_v2.md").as_deref(),
+            Some("release-notes-v2.md")
+        );
+        // Not counters: a camera index and a timestamp are part of a name
+        // nobody chose, and carrying them would be noise in every name.
+        assert_eq!(
+            description_to_filename("red circle on white", "IMG_0042.png").as_deref(),
+            Some("red-circle-on-white.png")
+        );
+        assert_eq!(
+            description_to_filename("settings page", "Screenshot_2026-09-10_154501.png").as_deref(),
+            Some("settings-page.png")
+        );
     }
 
     #[test]

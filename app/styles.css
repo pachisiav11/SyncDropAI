@@ -97,6 +97,9 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* The device name is whatever its owner typed, so on a narrow screen the
+     status moves under it rather than off the edge. */
+  flex-wrap: wrap;
   gap: 12px;
   padding: 12px max(16px, env(safe-area-inset-left)) 12px max(16px, env(safe-area-inset-right));
   padding-top: max(12px, env(safe-area-inset-top));
@@ -167,6 +170,10 @@ button:disabled {
   margin: 0 auto;
   padding: 18px 0 40px;
   display: grid;
+  /* A grid track is `auto` by default, which refuses to go below the widest
+     thing inside it. One long filename or device fingerprint then made every
+     panel wider than the phone and the whole page scrolled sideways. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
 }
 
@@ -175,6 +182,9 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 16px;
+  /* A grid item will not shrink past its own content without this, so the
+     ellipsis rules further down never got the chance to apply. */
+  min-width: 0;
 }
 
 .panel-head {
@@ -214,6 +224,8 @@ button:disabled {
 .device {
   display: flex;
   align-items: center;
+  /* Send and Forget drop under the name on a phone instead of pushing it out. */
+  flex-wrap: wrap;
   gap: 12px;
   padding: 12px;
   border: 1px solid var(--line);
@@ -239,7 +251,7 @@ button:disabled {
 }
 
 .device .meta {
-  flex: 1;
+  flex: 1 1 150px;
   min-width: 0;
 }
 
@@ -248,11 +260,15 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .device .sub {
   font-size: 0.82rem;
   color: var(--muted);
+  /* A fingerprint has no spaces to break at, and an inline box ignores both
+     rules below, so without this it simply ran off the side of the phone. */
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -350,6 +366,7 @@ button:disabled {
 
 .pending .name {
   font-weight: 600;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -389,6 +406,9 @@ button:disabled {
 
 .transfer .name {
   font-weight: 600;
+  /* A flex item stops at its own content unless it is told it may go smaller,
+     and the ellipsis below is worth nothing until it is. */
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -449,6 +469,8 @@ button:disabled {
 .transfer-actions {
   margin-top: 10px;
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 
@@ -610,6 +632,32 @@ button:disabled {
   .send-targets button {
     flex: 1 1 calc(50% - 4px);
   }
+
+  /* Filenames are long and a phone is narrow. Putting the size on its own line
+     gives the name the whole width before it has to be cut. */
+  .transfer-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+
+  /* Stacked, the name is sized by its own text rather than by the row, so the
+     cap is what makes the ellipsis above apply. */
+  .transfer .name {
+    max-width: 100%;
+  }
+
+  .device .meta {
+    flex-basis: 100%;
+  }
+
+  #settings-button {
+    display: block;
+    max-width: 45vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 /* --- naming model download ------------------------------------------------ */
@@ -641,4 +689,10 @@ button:disabled {
   width: 0%;
   background: var(--accent);
   transition: width 120ms linear;
+}
+
+/* An author `display` beats the user agent's rule for [hidden], so hiding the
+   naming switch on a host with no model to run has to be said here too. */
+.check[hidden] {
+  display: none;
 }

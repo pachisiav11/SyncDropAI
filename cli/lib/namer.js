@@ -13,7 +13,7 @@
 //   * Input resolution drives latency (the vision encoder tiles the image), so
 //     we downscale to a modest edge before sending.
 import { Jimp } from "jimp";
-import { cleanFilename, getExtension, isValidAiFilename } from "../../protocol/filenames.js";
+import { cleanFilename, getExtension, isValidAiFilename, keepTrailingIndex } from "../../protocol/filenames.js";
 import { describe, modelDir } from "./llama.js";
 
 const MAX_EDGE = Number(process.env.SYNCDROP_NAMER_MAX_EDGE || 512);
@@ -107,7 +107,7 @@ function descriptionToFilename(description, originalFilename) {
   const extension = getExtension(originalFilename);
   // cleanFilename lowercases, hyphenates, trims to 54 chars, and re-attaches an
   // extension if the string carries one — feed it the description + real ext.
-  const candidate = cleanFilename(`${cleaned}${extension}`);
+  const candidate = keepTrailingIndex(cleanFilename(`${cleaned}${extension}`), originalFilename);
   if (!isValidAiFilename(candidate, extension)) return null;
   // Reject the degenerate "untitled-file" cleanFilename emits for empty input.
   if (candidate.startsWith("untitled-file")) return null;

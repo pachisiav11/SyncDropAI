@@ -10,6 +10,7 @@ import { createSyncDrop } from "../protocol/client.js";
 import { memoryStorage, openVault } from "../protocol/vault.js";
 import { directorySink, fileSource, guessMime } from "../cli/lib/nodeio.js";
 import { memorySink } from "../protocol/sources.js";
+import { cleanFilename, keepTrailingIndex } from "../protocol/filenames.js";
 
 test("cli io: real files move between two devices via the relay", async (t) => {
   const server = await startServer({ port: 0, host: "127.0.0.1", verbose: false });
@@ -106,5 +107,32 @@ test("cli io: real files move between two devices via the relay", async (t) => {
 
   await t.test("a path that is not a file is refused", async () => {
     await assert.rejects(() => fileSource(work), /not a file/);
+  });
+});
+
+test("naming: a counter the model dropped is carried across", async (t) => {
+  const named = (description, original) => keepTrailingIndex(cleanFilename(description + ".txt"), original);
+
+  await t.test("a number the description kept is not repeated", () => {
+    assert.equal(named("tally file 1 is a list", "tally-1.txt"), "tally-file-1-is-a-list.txt");
+  });
+
+  await t.test("a number the description lost is put back", () => {
+    // The case this was written for. Three files whose contents read alike were
+    // named twice with their number and once without, and the third no longer
+    // said which file it was.
+    assert.equal(named("tally file is a list", "tally-3.txt"), "tally-file-is-a-list-3.txt");
+    assert.equal(keepTrailingIndex(cleanFilename("release notes.md"), "notes_v2.md"), "release-notes-v2.md");
+  });
+
+  await t.test("a camera index or a timestamp is not a counter", () => {
+    assert.equal(named("red circle on white", "IMG_0042.png"), "red-circle-on-white.txt");
+    assert.equal(named("settings page", "Screenshot_2026-09-10_154501.png"), "settings-page.txt");
+  });
+
+  await t.test("a long description makes room rather than losing the counter", () => {
+    const long = named("a very long description of what this particular file happens to contain", "report-7.txt");
+    assert.ok(long.endsWith("-7.txt"), "the counter survives the trim: " + long);
+    assert.ok(long.length <= 80);
   });
 });

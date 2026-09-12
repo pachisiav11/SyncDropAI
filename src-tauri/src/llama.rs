@@ -167,17 +167,41 @@ fn download_one(
     // download can never be mistaken for a usable model.
     let part = target.with_extension("part");
 
-    let response = agent(Duration::from_secs(60 * 60))
-        .get(&format!("{REPO}/{name}"))
+    // Whatever already arrived is kept, and the rest is asked for from where it
+    // stopped. These files are 1.7 GB together, which is a long way to lose to
+    // a dropped connection or a laptop going to sleep.
+    let mut resume = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+    if size > 0 && resume >= size {
+        let _ = std::fs::remove_file(&part);
+        resume = 0;
+    }
+
+    let mut request = agent(Duration::from_secs(60 * 60)).get(&format!("{REPO}/{name}"));
+    if resume > 0 {
+        request = request.header("Range", &format!("bytes={resume}-"));
+    }
+    let response = request
         .call()
         .map_err(|e| format!("Cannot download {name}: {e}"))?;
 
+    // A server that does not honour the range header answers 200 with the whole
+    // file, and appending that to what is already here would corrupt it.
+    let appending = resume > 0 && response.status().as_u16() == 206;
+    if !appending {
+        resume = 0;
+    }
+
     let mut reader = response.into_body().into_reader();
-    let mut file = std::fs::File::create(&part)
-        .map_err(|e| format!("Cannot write {}: {e}", part.display()))?;
+    let mut file = if appending {
+        std::fs::OpenOptions::new().append(true).open(&part)
+    } else {
+        std::fs::File::create(&part)
+    }
+    .map_err(|e| format!("Cannot write {}: {e}", part.display()))?;
 
     let mut buffer = vec![0u8; 1024 * 1024];
-    let mut written = 0u64;
+    let mut written = resume;
+    progress(*done + written, total);
     loop {
         let read = reader
             .read(&mut buffer)
@@ -193,7 +217,8 @@ fn download_one(
     drop(file);
 
     if size > 0 && written != size {
-        let _ = std::fs::remove_file(&part);
+        // Kept rather than deleted: the next attempt carries on from here
+        // instead of starting the whole file again.
         return Err(format!("{name} arrived incomplete ({written} of {size} bytes)"));
     }
 

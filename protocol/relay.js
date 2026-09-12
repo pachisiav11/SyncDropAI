@@ -168,7 +168,16 @@ export async function receiveViaRelay({
       await digest.update(index, plain);
       await sink.write(index, plain);
       received += plain.length;
-      onProgress({ transferred: received, total: metadata.size, part: index + 1, parts: envelope.parts });
+      // The name is sealed inside the envelope, so nothing outside this function
+      // knows it until here. Without carrying it, a file coming off the relay
+      // showed as a nameless row with a bar for the whole of its transfer.
+      onProgress({
+        name: metadata.name,
+        transferred: received,
+        total: metadata.size,
+        part: index + 1,
+        parts: envelope.parts
+      });
     }
 
     const ours = await digest.final();

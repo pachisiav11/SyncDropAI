@@ -78,20 +78,39 @@ async function downloadOne(name, target, size, onChunk) {
   // Written beside the target and renamed at the end, so an interrupted
   // download can never be mistaken for a usable model.
   const part = `${target}.part`;
-  const response = await fetch(`${REPO}/${name}`);
+
+  // Whatever already arrived is kept, and the rest is asked for from where it
+  // stopped. These files are 1.7 GB together, which is a long way to lose to a
+  // dropped connection or a laptop going to sleep.
+  let resume = fs.existsSync(part) ? fs.statSync(part).size : 0;
+  if (resume >= size) {
+    fs.rmSync(part, { force: true });
+    resume = 0;
+  }
+
+  const response = await fetch(`${REPO}/${name}`, {
+    headers: resume ? { Range: `bytes=${resume}-` } : {}
+  });
   if (!response.ok) throw new Error(`Cannot download ${name}: ${response.status}`);
 
-  let written = 0;
+  // A server that does not honour the range header answers 200 with the whole
+  // file, and appending that to what is already here would corrupt it.
+  const appending = resume > 0 && response.status === 206;
+  if (!appending) resume = 0;
+
+  let written = resume;
+  onChunk(resume);
   await pipeline(Readable.fromWeb(response.body), async function* (chunks) {
     for await (const chunk of chunks) {
       written += chunk.length;
       onChunk(chunk.length);
       yield chunk;
     }
-  }, fs.createWriteStream(part));
+  }, fs.createWriteStream(part, { flags: appending ? "a" : "w" }));
 
   if (written !== size) {
-    fs.rmSync(part, { force: true });
+    // Kept rather than deleted: the next run carries on from here instead of
+    // starting the whole file again.
     throw new Error(`${name} arrived incomplete (${written} of ${size} bytes)`);
   }
   fs.renameSync(part, target);
