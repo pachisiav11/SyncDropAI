@@ -178,6 +178,7 @@ export function createSyncDrop({
     return new Promise((resolve, reject) => {
       let theirHello = null;
       let theirTag = null;
+      let myTag = null;
       let settled = false;
 
       const finish = (error, value) => {
@@ -225,7 +226,6 @@ export function createSyncDrop({
 
       let sentHello = false;
       const sendHello = () => {
-        if (sentHello) return;
         sentHello = true;
         signaling.sendPair(roomId, myHello);
       };
@@ -234,27 +234,44 @@ export function createSyncDrop({
         // The server only relays to devices already in the room, so a hello
         // sent before the other side arrives is simply dropped. Wait until the
         // room reports two occupants, which both devices are told about.
+        //
+        // Sent again on every refill rather than once. A dropped socket that
+        // reconnects rejoins its rooms, and the device that stayed would
+        // otherwise sit forever on a hello it had already spent. A phone that
+        // sleeps for a moment is enough to cause that. The hello is built once
+        // outside this promise, so a repeat carries identical bytes and the
+        // confirmation transcript does not move.
         joined(occupants) {
           if (occupants >= 2) sendHello();
         },
         async handle(_from, payload) {
           // Whoever arrived first may still be waiting on its own joined
           // notification; a message proves the room is occupied either way.
-          sendHello();
+          if (!sentHello) sendHello();
           try {
             if (payload?.type === "confirm") {
               theirTag = payload.tag;
               await tryConfirm();
               return;
             }
-            if (theirHello) return;
+            // A hello that repeats byte for byte is the other side asking
+            // again, not a second device. It is still waiting on the
+            // confirmation that was already sent once, so send that again
+            // instead of recomputing a tag over the same transcript.
+            if (theirHello && payload?.sig === theirHello.sig) {
+              if (myTag) signaling.sendPair(roomId, { type: "confirm", tag: myTag });
+              return;
+            }
+            // A different hello means the other side started the exchange
+            // over. Its old tag covered a transcript that no longer applies.
+            theirTag = null;
             theirHello = payload;
             const peer = await pairing.verifyHello(payload);
             if (peer.deviceId === identity.deviceId) {
               return finish(new Error("That code belongs to this device"));
             }
-            const tag = await pairing.confirmationTag(pairKey, myHello, theirHello);
-            signaling.sendPair(roomId, { type: "confirm", tag });
+            myTag = await pairing.confirmationTag(pairKey, myHello, theirHello);
+            signaling.sendPair(roomId, { type: "confirm", tag: myTag });
             await tryConfirm();
           } catch (error) {
             finish(error);

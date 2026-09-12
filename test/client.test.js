@@ -107,6 +107,39 @@ test("client: pairing, presence, relay fallback", async (t) => {
     await assert.rejects(() => pc.pair(pairing.generatePairingCode(), { timeoutMs: 600 }), /timed out/i);
   });
 
+  await t.test("a device that rejoins the room still pairs", async () => {
+    // The abort fires on the joined notification, so this device leaves before
+    // it ever answers the hello the other one has already sent. That is the
+    // state the exchange used to deadlock in: the peer treated its hello as
+    // spent, the second attempt waited out the full timeout, and both devices
+    // reported a failure. A phone whose socket drops and reconnects lands in
+    // the same place, because reconnecting rejoins the room.
+    const abort = new AbortController();
+    const scratch = createSyncDrop({
+      vault: await openVault(memoryStorage(), { name: "Scratch", platform: "linux" }),
+      serverUrl,
+      createSink: memorySink(),
+      onEvent: (event) => {
+        if (event.type === "pair-room" && event.occupants >= 2) abort.abort();
+      }
+    });
+    await scratch.start();
+    const other = await makeClient(serverUrl, "Other", "android");
+
+    const offer = pairing.createPairingOffer();
+    const waiting = other.pair(offer.code, { timeoutMs: 8000 });
+    await new Promise((r) => setTimeout(r, 300));
+
+    await assert.rejects(() => scratch.pair(offer.code, { signal: abort.signal }), /cancelled/i);
+
+    const [again, fromOther] = await Promise.all([scratch.pair(offer.code, { timeoutMs: 8000 }), waiting]);
+    assert.equal(again.deviceId, other.identity.deviceId);
+    assert.equal(fromOther.deviceId, scratch.identity.deviceId);
+
+    scratch.stop();
+    other.stop();
+  });
+
   await t.test("sending to an unpaired device is refused", async () => {
     await assert.rejects(
       () => pc.send("AAAAAAAAAAAAAAAAAAAAAAAA", bytesSource({ name: "x.bin", bytes: randomBytes(8) })),

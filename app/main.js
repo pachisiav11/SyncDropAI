@@ -5,6 +5,7 @@ import { createSyncDrop } from "../protocol/client.js";
 import { openVault } from "../protocol/vault.js";
 import { blobSource } from "../protocol/sources.js";
 import { formatPairingCode, parsePairingInput } from "../protocol/pairing.js";
+import { PAIR_CODE_CHARS } from "../protocol/constants.js";
 import { createHost, isNative } from "./host.js";
 import * as ui from "./ui.js";
 
@@ -385,6 +386,7 @@ function setupPairing() {
   let mode = "show";
   let offer = null;
   let attempt = null;
+  let liveCode = "";
 
   const setStatus = (message, tone = "") => {
     status.textContent = message;
@@ -397,6 +399,7 @@ function setupPairing() {
   const cancel = () => {
     attempt?.abort();
     attempt = null;
+    liveCode = "";
   };
 
   const selectTab = (next) => {
@@ -415,9 +418,15 @@ function setupPairing() {
   }
 
   const run = async (code) => {
+    // Pressing Pair while the shown code is already listening, or clicking the
+    // tab that is already open, used to tear the attempt down and start a
+    // second one in the same room. The other device had spent its hello by
+    // then, so the restarted attempt waited out the full five minutes.
+    if (attempt && liveCode === code) return;
     cancel();
     const controller = new AbortController();
     attempt = controller;
+    liveCode = code;
     setStatus("Waiting for the other device\u2026");
     try {
       const peer = await client.pair(code, { signal: controller.signal });
@@ -428,7 +437,10 @@ function setupPairing() {
       // A cancelled attempt was replaced by a newer one; its message is stale.
       if (!controller.signal.aborted) setStatus(error.message, "error");
     } finally {
-      if (attempt === controller) attempt = null;
+      if (attempt === controller) {
+        attempt = null;
+        liveCode = "";
+      }
     }
   };
 
@@ -453,8 +465,8 @@ function setupPairing() {
   });
 
   el("pair-input").addEventListener("input", (event) => {
-    const raw = event.target.value.replace(/[^0-9A-Za-z]/g, "").toUpperCase().slice(0, 12);
-    event.target.value = raw.length > 4 ? formatPairingCode(raw) : raw;
+    const raw = event.target.value.replace(/\D/g, "").slice(0, PAIR_CODE_CHARS);
+    event.target.value = raw.length > 3 ? formatPairingCode(raw) : raw;
   });
 
   el("pair-cancel").addEventListener("click", () => dialog.close());
