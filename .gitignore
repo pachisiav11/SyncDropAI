@@ -11,8 +11,6 @@ yarn-debug.log*
 yarn-error.log*
 android/local.properties
 builds/
-supabase/.credentials.local
-supabase/.temp/
 .syncdrop-data/
 scripts/pairdebug.mjs
 src-tauri/target/
