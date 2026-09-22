@@ -11,6 +11,12 @@ import { sleep } from "./util.js";
 
 const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_MS = 30000;
+// Nothing tells a socket that the far end went away without closing it: a
+// phone that slept, a network that dropped the mapping. An unanswered ping is
+// the only way this side finds out, and the relay learns the same thing from
+// the pings that stop arriving.
+const KEEPALIVE_MS = 25000;
+const PONG_TIMEOUT_MS = 10000;
 
 export function createSignalingClient({
   url,
@@ -21,7 +27,8 @@ export function createSignalingClient({
   onPeer = () => {},
   onMail = () => {},
   onStatus = () => {},
-  onJoined = () => {}
+  onJoined = () => {},
+  keepaliveMs = KEEPALIVE_MS
 }) {
   if (!WebSocketImpl) throw new Error("No WebSocket implementation available");
 
@@ -29,6 +36,11 @@ export function createSignalingClient({
   let ready = false;
   let closed = false;
   let attempt = 0;
+  // Bumped whenever the current socket is given up on, so a late event from a
+  // socket this client has already replaced cannot act on the new one.
+  let generation = 0;
+  let keepalive = null;
+  let pongTimer = null;
   let readyWaiters = [];
   let watching = [];
   const rooms = new Set();
@@ -49,6 +61,52 @@ export function createSignalingClient({
     socket.send(JSON.stringify(message));
   }
 
+  function stopKeepalive() {
+    clearInterval(keepalive);
+    clearTimeout(pongTimer);
+    keepalive = null;
+    pongTimer = null;
+  }
+
+  // Any message at all counts as the answer. A new probe replaces the deadline
+  // of one still waiting, so a host that asks for a quick answer gets one.
+  function probe(timeoutMs = PONG_TIMEOUT_MS) {
+    if (!ready) return;
+    try {
+      send({ type: "ping" });
+    } catch {
+      return;
+    }
+    clearTimeout(pongTimer);
+    const current = generation;
+    pongTimer = setTimeout(() => {
+      pongTimer = null;
+      if (current !== generation) return;
+      const dead = socket;
+      lost();
+      try {
+        dead?.close();
+      } catch {
+        // It is being abandoned either way.
+      }
+    }, timeoutMs);
+    pongTimer.unref?.();
+  }
+
+  function lost() {
+    generation += 1;
+    stopKeepalive();
+    const wasReady = ready;
+    setStatus("offline");
+    if (closed) return flushReady(new Error("Signaling client was closed"));
+    attempt += 1;
+    const backoff = Math.min(RECONNECT_BASE_MS * 2 ** (attempt - 1), RECONNECT_MAX_MS);
+    // Full jitter, so a server restart does not bring every device back in
+    // the same millisecond.
+    const delay = wasReady ? Math.random() * RECONNECT_BASE_MS : Math.random() * backoff;
+    sleep(delay).then(open);
+  }
+
   async function handle(message) {
     switch (message.type) {
       case "challenge":
@@ -62,6 +120,10 @@ export function createSignalingClient({
         if (watching.length) send({ type: "watch", peers: watching });
         for (const roomId of rooms) send({ type: "join-pair", roomId });
         if (message.mail > 0) onMail(message.mail);
+        stopKeepalive();
+        keepalive = setInterval(() => probe(), keepaliveMs);
+        keepalive.unref?.();
+        probe();
         flushReady();
         break;
       case "signal":
@@ -95,9 +157,15 @@ export function createSignalingClient({
 
   function open() {
     if (closed) return;
+    const mine = ++generation;
+    const live = () => mine === generation;
     setStatus("connecting");
-    socket = new WebSocketImpl(url);
-    socket.onmessage = (event) => {
+    const ws = new WebSocketImpl(url);
+    socket = ws;
+    ws.onmessage = (event) => {
+      if (!live()) return;
+      clearTimeout(pongTimer);
+      pongTimer = null;
       let parsed;
       try {
         parsed = JSON.parse(typeof event.data === "string" ? event.data : new TextDecoder().decode(event.data));
@@ -106,19 +174,11 @@ export function createSignalingClient({
       }
       handle(parsed).catch((error) => onStatus("error", error.message));
     };
-    socket.onclose = () => {
-      const wasReady = ready;
-      setStatus("offline");
-      if (closed) return flushReady(new Error("Signaling client was closed"));
-      attempt += 1;
-      const backoff = Math.min(RECONNECT_BASE_MS * 2 ** (attempt - 1), RECONNECT_MAX_MS);
-      // Full jitter, so a server restart does not bring every device back in
-      // the same millisecond.
-      const delay = wasReady ? Math.random() * RECONNECT_BASE_MS : Math.random() * backoff;
-      sleep(delay).then(open);
+    ws.onclose = () => {
+      if (live()) lost();
     };
-    socket.onerror = () => {
-      if (socket && socket.readyState !== 1) onStatus("error", "Signaling connection failed");
+    ws.onerror = () => {
+      if (live() && ws.readyState !== 1) onStatus("error", "Signaling connection failed");
     };
   }
 
@@ -149,11 +209,15 @@ export function createSignalingClient({
       rooms.delete(roomId);
       if (ready) send({ type: "leave-pair", roomId });
     },
-    ping() {
-      send({ type: "ping" });
+    // For a host that knows the socket may have died under it, such as an app
+    // coming back from the background.
+    ping(timeoutMs) {
+      probe(timeoutMs);
     },
     close() {
       closed = true;
+      generation += 1;
+      stopKeepalive();
       flushReady(new Error("Signaling client was closed"));
       socket?.close();
       socket = null;

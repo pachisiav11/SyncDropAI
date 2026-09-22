@@ -16,6 +16,12 @@ import { createRtcTransport } from "./webrtc.js";
 import { createTransferSession } from "./transfer.js";
 import { collectMailbox, sendViaRelay } from "./relay.js";
 import * as pairing from "./pairing.js";
+import { shortId } from "./util.js";
+
+// How long a returning app gives its socket to prove it survived the break.
+const WAKE_PING_TIMEOUT_MS = 5000;
+
+const idle = (entry) => !entry.session || (entry.session.active.outgoing === 0 && entry.session.active.incoming === 0);
 
 // The `d` parameter is a routing hint, not a claim of identity. A single-process
 // host ignores it; the Cloudflare host uses it to pick which Durable Object owns
@@ -55,7 +61,16 @@ export function createSyncDrop({
   const signaling = createSignalingClient({
     url: websocketUrl(serverUrl, identity.deviceId),
     identity,
-    onStatus: (status, detail) => emit({ type: "status", status, detail }),
+    onStatus: (status, detail) => {
+      // Our own socket dropping is how an app that was in the background finds
+      // out it was away. The other side heard we went offline and closed its
+      // end, so an idle connection from before is one the next send would trust
+      // and write into. A connection still carrying a file is left to finish.
+      if (status === "offline") {
+        for (const [deviceId, entry] of connections) if (idle(entry)) dropConnection(deviceId, entry);
+      }
+      emit({ type: "status", status, detail });
+    },
     onPeer: (deviceId, isOnline) => {
       if (isOnline) online.add(deviceId);
       else {
@@ -65,7 +80,8 @@ export function createSyncDrop({
       }
       emit({ type: "presence", deviceId, online: isOnline });
     },
-    onSignal: (from, payload) => routeSignal(from, payload),
+    onSignal: (from, payload) =>
+      routeSignal(from, payload).catch((error) => emit({ type: "error", deviceId: from, error: error.message })),
     onPair: (roomId, from, payload) => pendingPairings.get(roomId)?.handle(from, payload),
     onJoined: (roomId, occupants) => {
       emit({ type: "pair-room", roomId, occupants });
@@ -77,9 +93,11 @@ export function createSyncDrop({
     }
   });
 
-  function dropConnection(deviceId) {
+  // `expected` keeps a stale callback from tearing down the connection that
+  // replaced the one it belonged to.
+  function dropConnection(deviceId, expected) {
     const existing = connections.get(deviceId);
-    if (!existing) return;
+    if (!existing || (expected && existing !== expected)) return;
     connections.delete(deviceId);
     try {
       existing.session?.close();
@@ -96,8 +114,19 @@ export function createSyncDrop({
     if (!peer) return emit({ type: "rejected-signal", from });
 
     let entry = connections.get(from);
+    if (entry && payload.kind === "offer") {
+      // A new offer means the other side gave up on the connection we hold and
+      // started again. Two devices that dial each other at the same moment
+      // would each drop the other's attempt, so the lower id keeps its own.
+      if (entry.initiator && !entry.session && identity.deviceId < from) return;
+      dropConnection(from, entry);
+      entry = null;
+    }
     if (!entry) {
       if (payload.kind !== "offer") return;
+      // A runtime with no WebRTC, such as the CLI, cannot answer. Saying so
+      // sends the other device to the relay now rather than at its timeout.
+      if (!globalThis.RTCPeerConnection) return signaling.signal(from, { kind: "no-direct" });
       entry = openConnection(peer, false);
     }
     try {
@@ -109,19 +138,23 @@ export function createSyncDrop({
   }
 
   function openConnection(peer, initiator) {
-    const transport = createRtcTransport({
+    const entry = { peer, initiator, transport: null, session: null, ready: null };
+    entry.transport = createRtcTransport({
       identity,
       peer,
       signaling,
       initiator,
       iceServers,
-      onState: (state) => emit({ type: "connection", deviceId: peer.deviceId, state })
+      onState: (state) => {
+        emit({ type: "connection", deviceId: peer.deviceId, state });
+        // Nothing else watches a channel once it is open, so without this a
+        // closed one stayed cached and the next send waited on it forever.
+        if (state === "closed" || state === "failed") dropConnection(peer.deviceId, entry);
+      }
     });
-
-    const entry = { peer, transport, session: null, ready: null };
     connections.set(peer.deviceId, entry);
 
-    entry.ready = transport.start().then(async (channel) => {
+    entry.ready = entry.transport.start().then(async (channel) => {
       entry.session = createTransferSession({
         channel,
         autoAccept: (info) => autoAccept({ ...info, from: peer.deviceId, via: "p2p" }),
@@ -135,7 +168,7 @@ export function createSyncDrop({
       return entry;
     });
 
-    entry.ready.catch(() => dropConnection(peer.deviceId));
+    entry.ready.catch(() => dropConnection(peer.deviceId, entry));
     return entry;
   }
 
@@ -145,6 +178,23 @@ export function createSyncDrop({
     const existing = connections.get(deviceId);
     if (existing) return existing.ready;
     return openConnection(peer, true).ready;
+  }
+
+  // A connection kept from earlier is only a guess that the other side is still
+  // there. When it proves dead, one fresh connection is worth trying before the
+  // relay: the other device is usually awake and simply closed its end while
+  // this one was in the background.
+  async function sendDirect(deviceId, source, meta, retry = true) {
+    const reused = connections.has(deviceId);
+    const entry = await connect(deviceId);
+    try {
+      const result = await entry.session.send(source, meta);
+      return { ...result, via: "p2p", route: entry.route ?? null };
+    } catch (error) {
+      if (!retry || !reused || error.declined) throw error;
+      dropConnection(deviceId, entry);
+      return sendDirect(deviceId, source, meta, false);
+    }
   }
 
   async function collect() {
@@ -319,6 +369,9 @@ export function createSyncDrop({
     async send(deviceId, source, { prefer = "auto", meta } = {}) {
       const peer = vault.get(deviceId);
       if (!peer) throw new Error("That device is not paired with this one");
+      // One id for the whole attempt, whichever path carries it, so a host can
+      // keep a single row for the file through a fallback.
+      const id = meta?.id ?? shortId(16);
 
       // A runtime with no WebRTC at all (the CLI, a server-side script) has no
       // direct path to attempt, so go straight to the relay rather than
@@ -327,12 +380,10 @@ export function createSyncDrop({
       const tryDirect = prefer !== "relay" && canDirect && online.has(deviceId);
       if (tryDirect) {
         try {
-          const entry = await connect(deviceId);
-          const result = await entry.session.send(source, meta);
-          return { ...result, via: "p2p", route: entry.route ?? null };
+          return await sendDirect(deviceId, source, { ...meta, id });
         } catch (error) {
-          if (prefer === "p2p") throw error;
-          emit({ type: "fallback", deviceId, reason: error.message });
+          if (prefer === "p2p" || error.declined) throw error;
+          emit({ type: "fallback", deviceId, id, reason: error.message });
           dropConnection(deviceId);
         }
       }
@@ -351,10 +402,17 @@ export function createSyncDrop({
         peer,
         source,
         onProgress: (progress) =>
-          emit({ type: "progress", direction: "send", via: "relay", deviceId, name: source.name, ...progress })
+          emit({ type: "progress", direction: "send", via: "relay", deviceId, id, name: source.name, ...progress })
       });
-      emit({ type: "complete", direction: "send", via: "relay", deviceId, name: source.name, total: source.size });
+      emit({ type: "complete", direction: "send", via: "relay", deviceId, id, name: source.name, total: source.size });
       return { ...queued, via: "relay" };
+    },
+
+    // For a host with reason to think it was away, such as an app coming back
+    // to the foreground: a socket that died meanwhile is found in seconds
+    // rather than at the next keepalive.
+    wake() {
+      signaling.ping(WAKE_PING_TIMEOUT_MS);
     },
 
     stop() {

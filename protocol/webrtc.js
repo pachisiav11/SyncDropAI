@@ -29,6 +29,10 @@ export const DEFAULT_ICE_SERVERS = [{ urls: "stun:stun.cloudflare.com:3478" }];
 
 const CHANNEL_LABEL = "syncdrop";
 const CONNECT_TIMEOUT_MS = 30000;
+// A device that is awake answers an offer in well under a second. Waiting the
+// full connect timeout for one that has gone to sleep - which the relay may not
+// have noticed yet - is what made a send look frozen.
+const ANSWER_TIMEOUT_MS = 10000;
 
 export async function signDescription(identity, description) {
   const payload = { kind: description.type, sdp: description.sdp };
@@ -61,6 +65,7 @@ export function createRtcTransport({
   initiator,
   iceServers = DEFAULT_ICE_SERVERS,
   timeoutMs = CONNECT_TIMEOUT_MS,
+  answerTimeoutMs = ANSWER_TIMEOUT_MS,
   RTCPeerConnectionImpl = globalThis.RTCPeerConnection,
   onState = () => {}
 }) {
@@ -70,6 +75,7 @@ export function createRtcTransport({
   const handlers = [];
   let channel = null;
   let settled = false;
+  let answerTimer = null;
   let resolveReady;
   let rejectReady;
 
@@ -77,10 +83,16 @@ export function createRtcTransport({
     resolveReady = resolve;
     rejectReady = reject;
   });
+  // Whoever calls start() sees the outcome. One that failed before returning
+  // it leaves nobody listening, and closing it must not raise an unhandled
+  // rejection.
+  ready.catch(() => {});
 
   const finish = (error) => {
     if (settled) return;
     settled = true;
+    clearTimeout(timer);
+    clearTimeout(answerTimer);
     if (error) rejectReady(error);
     else resolveReady(adapter);
   };
@@ -94,7 +106,6 @@ export function createRtcTransport({
     channel = dataChannel;
     channel.binaryType = "arraybuffer";
     channel.onopen = () => {
-      clearTimeout(timer);
       onState("open");
       finish();
     };
@@ -149,7 +160,9 @@ export function createRtcTransport({
       });
     },
     close() {
-      clearTimeout(timer);
+      // Settles a connect still in progress; without this, closing before the
+      // channel opened left whoever awaited it waiting for good.
+      finish(new Error("Connection closed"));
       try {
         channel?.close();
       } finally {
@@ -178,6 +191,12 @@ export function createRtcTransport({
   };
 
   async function handleSignal(payload) {
+    // Unsigned, and it need not be: whoever carries the signals can already
+    // stop a direct connection by dropping them. This only makes it quick.
+    if (payload.kind === "no-direct") {
+      finish(new Error("The other device cannot take a direct connection"));
+      return;
+    }
     if (payload.kind === "candidate") {
       // Candidates can arrive before the remote description is set; the browser
       // queues them itself once a remote description exists, and throws before.
@@ -190,6 +209,7 @@ export function createRtcTransport({
     }
 
     const description = await verifyDescription(peer, payload);
+    if (description.type === "answer") clearTimeout(answerTimer);
     await connection.setRemoteDescription(description);
 
     if (description.type === "offer") {
@@ -204,6 +224,9 @@ export function createRtcTransport({
     const offer = await connection.createOffer();
     await connection.setLocalDescription(offer);
     signaling.signal(peer.deviceId, await signDescription(identity, connection.localDescription));
+    if (!settled) {
+      answerTimer = setTimeout(() => finish(new Error("The other device did not answer")), answerTimeoutMs);
+    }
     return ready;
   }
 

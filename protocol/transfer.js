@@ -15,6 +15,12 @@ import { now, shortId } from "./util.js";
 
 const MAX_STREAM_ID = 0xffff;
 
+// A data channel can report itself open long after the far end stopped
+// listening: a phone that goes to sleep closes nothing on its way out. The
+// receiver answers every offer the moment it arrives, so silence for this long
+// means nobody is there, and the caller can try another way.
+const OFFER_TIMEOUT_MS = 10000;
+
 function chunkCount(size, chunkSize) {
   return size === 0 ? 1 : Math.ceil(size / chunkSize);
 }
@@ -43,6 +49,7 @@ export function createTransferSession({
   chunkSize = P2P_CHUNK_SIZE,
   autoAccept = () => true,
   createSink,
+  offerTimeoutMs = OFFER_TIMEOUT_MS,
   onEvent = () => {}
 }) {
   const outgoing = new Map();
@@ -75,6 +82,7 @@ function createProgressGate() {
 }
 
   const control = (message) => channel.send(encodeControl(message));
+  const answered = (entry) => clearTimeout(entry.timer);
 
   function allocateStreamId() {
     for (let i = 0; i <= MAX_STREAM_ID; i += 1) {
@@ -158,17 +166,28 @@ function createProgressGate() {
       entry.reject = reject;
     });
 
-    control({
-      type: "offer",
-      streamId,
-      id,
-      name: source.name,
-      size: source.size,
-      mime: source.mime ?? "application/octet-stream",
-      chunkSize,
-      chunks: chunkCount(source.size, chunkSize),
-      meta: meta.extra ?? null
-    });
+    try {
+      control({
+        type: "offer",
+        streamId,
+        id,
+        name: source.name,
+        size: source.size,
+        mime: source.mime ?? "application/octet-stream",
+        chunkSize,
+        chunks: chunkCount(source.size, chunkSize),
+        meta: meta.extra ?? null
+      });
+    } catch (error) {
+      outgoing.delete(streamId);
+      throw error;
+    }
+    entry.timer = setTimeout(() => {
+      if (outgoing.get(streamId) !== entry) return;
+      outgoing.delete(streamId);
+      entry.cancelled = true;
+      entry.reject(new Error("The other device did not answer"));
+    }, offerTimeoutMs);
     emit({ type: "offered", direction: "send", streamId, id, name: source.name, total: source.size });
     return entry;
   }
@@ -221,6 +240,7 @@ function createProgressGate() {
 
       case "accept": {
         if (!entry) return;
+        answered(entry);
         entry.state = TRANSFER_STATE.sending;
         entry.resumeFrom = Number(message.resumeFrom) || 0;
         entry.transferred = Math.min(entry.source.size, entry.resumeFrom * chunkSize);
@@ -237,10 +257,12 @@ function createProgressGate() {
 
       case "reject": {
         if (!entry) return;
+        answered(entry);
         entry.state = TRANSFER_STATE.rejected;
         outgoing.delete(entry.streamId);
         emit({ type: "rejected", direction: "send", streamId: entry.streamId, id: entry.id, reason: message.reason });
-        entry.reject(new Error(message.reason || "Rejected by the receiving device"));
+        // Marked so the caller does not route a refused file around the refusal.
+        entry.reject(Object.assign(new Error(message.reason || "Rejected by the receiving device"), { declined: true }));
         return;
       }
 
@@ -306,6 +328,7 @@ function createProgressGate() {
           emit({ type: "failed", direction: "receive", streamId: message.streamId, id: arriving.id, error: "Cancelled by sender" });
         }
         if (entry) {
+          answered(entry);
           entry.cancelled = true;
           outgoing.delete(entry.streamId);
           entry.reject(new Error("Cancelled by the other device"));
@@ -320,6 +343,7 @@ function createProgressGate() {
           emit({ type: "failed", direction: "receive", streamId: message.streamId, id: arriving.id, error: message.message });
         }
         if (entry) {
+          answered(entry);
           entry.cancelled = true;
           outgoing.delete(entry.streamId);
           emit({ type: "failed", direction: "send", streamId: message.streamId, id: entry.id, error: message.message });
@@ -364,11 +388,34 @@ function createProgressGate() {
   // guarantee in one place.
   let inbound = Promise.resolve();
   channel.onMessage((data) => {
+    let message = null;
+    if (!isBinaryFrame(data)) {
+      try {
+        message = decodeControl(data);
+      } catch (error) {
+        emit({ type: "error", error: error.message });
+        return;
+      }
+      // Answered ahead of the queue: a receiver still working through a large
+      // file must not look absent to the next offer.
+      if (message.type === "seen") {
+        const entry = outgoing.get(message.streamId);
+        if (entry) answered(entry);
+        return;
+      }
+      if (message.type === "offer" && !closed) {
+        try {
+          control({ type: "seen", streamId: message.streamId });
+        } catch {
+          // A channel that cannot carry this cannot carry the transfer either.
+        }
+      }
+    }
     inbound = inbound.then(async () => {
       if (closed) return;
       try {
-        if (isBinaryFrame(data)) await handleChunk(data);
-        else await handleControl(decodeControl(data));
+        if (message) await handleControl(message);
+        else await handleChunk(data);
       } catch (error) {
         emit({ type: "error", error: error.message });
       }
@@ -394,6 +441,7 @@ function createProgressGate() {
     close() {
       closed = true;
       for (const entry of outgoing.values()) {
+        answered(entry);
         entry.cancelled = true;
         entry.reject(new Error("Connection closed"));
       }

@@ -18,6 +18,15 @@ const MAILBOX_LIMIT = 512;
 const WATCHER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
+// Clients ping every 25 seconds. A device that sleeps or loses its network
+// closes nothing on its way out, so without this its socket stayed "online"
+// for as long as the runtime cared to keep it, and senders waited on a device
+// that was not there. Two missed pings and some slack is enough to call it.
+const KEEPALIVE_STALE_MS = 65 * 1000;
+const SWEEP_INTERVAL_MS = 20 * 1000;
+const PING = JSON.stringify({ type: "ping" });
+const PONG = JSON.stringify({ type: "pong" });
+
 const json = (value, status = 200) =>
   new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
 
@@ -26,6 +35,11 @@ export class DeviceObject {
     this.state = state;
     this.env = env;
     this.deviceId = null; // learned on first use, then cached in storage
+    this.staleMs = Number(env.KEEPALIVE_STALE_MS) || KEEPALIVE_STALE_MS;
+    this.sweepMs = Number(env.SWEEP_INTERVAL_MS) || SWEEP_INTERVAL_MS;
+    // The runtime answers pings itself, without waking the object, and notes
+    // when each socket last sent one. That note is what the sweep reads.
+    state.setWebSocketAutoResponse(new WebSocketRequestResponsePair(PING, PONG));
   }
 
   async name() {
@@ -231,7 +245,7 @@ export class DeviceObject {
     const mail = (await this.mailList()).length;
     socket.send(JSON.stringify({ type: "ready", deviceId: peer.deviceId, mail }));
     if (first) await this.announce(true);
-    await this.schedulePrune();
+    await this.scheduleSweep();
   }
 
   async handleWatch(socket, me, peers) {
@@ -264,18 +278,41 @@ export class DeviceObject {
     });
   }
 
-  // Watcher rows outlive the sockets that made them, so give the object a slow
-  // heartbeat that drops the ones nobody renewed.
-  async schedulePrune() {
-    if (await this.state.storage.getAlarm()) return;
-    await this.state.storage.setAlarm(Date.now() + PRUNE_INTERVAL_MS);
+  // One alarm, two chores. While a socket is open it runs every few seconds
+  // to close sockets that went quiet, and once a day it drops watcher rows
+  // nobody renewed, since those outlive the sockets that made them. An alarm
+  // left a day out by an older version is pulled in.
+  async scheduleSweep() {
+    const due = Date.now() + this.sweepMs;
+    const at = await this.state.storage.getAlarm();
+    if (!at || at > due) await this.state.storage.setAlarm(due);
   }
 
   async alarm() {
-    const found = await this.state.storage.list({ prefix: "w:" });
-    const cutoff = Date.now() - WATCHER_TTL_MS;
-    const stale = [...found].filter(([, seenAt]) => seenAt < cutoff).map(([key]) => key);
-    if (stale.length) await this.state.storage.delete(stale);
-    if (this.sockets().length > 0) await this.state.storage.setAlarm(Date.now() + PRUNE_INTERVAL_MS);
+    const now = Date.now();
+    const sockets = this.sockets();
+    const quiet = sockets.filter((socket) => {
+      // A client that has never pinged predates keepalives and is left alone.
+      const pinged = this.state.getWebSocketAutoResponseTimestamp(socket);
+      return pinged && now - pinged.getTime() > this.staleMs;
+    });
+    for (const socket of quiet) {
+      try {
+        socket.close(4000, "No keepalive");
+      } catch {
+        // Already gone.
+      }
+    }
+    if (quiet.length > 0 && quiet.length === sockets.length) await this.announce(false);
+
+    if (now - ((await this.state.storage.get("prunedAt")) ?? 0) >= PRUNE_INTERVAL_MS) {
+      const found = await this.state.storage.list({ prefix: "w:" });
+      const cutoff = now - WATCHER_TTL_MS;
+      const stale = [...found].filter(([, seenAt]) => seenAt < cutoff).map(([key]) => key);
+      if (stale.length) await this.state.storage.delete(stale);
+      await this.state.storage.put("prunedAt", now);
+    }
+
+    if (sockets.length > quiet.length) await this.state.storage.setAlarm(now + this.sweepMs);
   }
 }

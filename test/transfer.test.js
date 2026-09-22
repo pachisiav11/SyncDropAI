@@ -92,7 +92,7 @@ test("the receiver can decline a transfer", async () => {
   const { sender, received } = pair({ autoAccept: () => false });
   await assert.rejects(
     () => sender.send(bytesSource({ name: "unwanted.exe", bytes: randomBytes(100) })),
-    /Declined by the receiving device/
+    (error) => /Declined by the receiving device/.test(error.message) && error.declined === true
   );
   assert.equal(received.length, 0);
 });
@@ -219,4 +219,28 @@ test("the engine digest matches a standalone digest of the same bytes", async ()
   const b = await digestBytes(bytes, 1024);
   assert.equal(a, b);
   assert.notEqual(await digestBytes(bytes, 2048), a, "chunk size is part of the digest definition");
+});
+
+test("an offer nobody answers gives up instead of waiting forever", async () => {
+  // A channel that still says it is open while the far end is asleep: what it
+  // is given goes nowhere, and nothing comes back.
+  const silent = { bufferedAmount: 0, send() {}, onMessage() {} };
+  const sender = createTransferSession({ channel: silent, createSink: memorySink(), offerTimeoutMs: 100 });
+  await assert.rejects(
+    () => sender.send(bytesSource({ name: "unheard.bin", bytes: randomBytes(100) })),
+    /did not answer/
+  );
+  assert.equal(sender.active.outgoing, 0);
+});
+
+test("a receiver slow to accept still answers the offer at once", async () => {
+  const [left, right] = createLoopbackPair();
+  const sender = createTransferSession({ channel: left, createSink: memorySink(), offerTimeoutMs: 100 });
+  createTransferSession({
+    channel: right,
+    createSink: memorySink(),
+    autoAccept: () => new Promise((resolve) => setTimeout(() => resolve(true), 400))
+  });
+  const result = await sender.send(bytesSource({ name: "patient.bin", bytes: randomBytes(3000) }));
+  assert.equal(result.size, 3000);
 });

@@ -6,6 +6,7 @@ import { openVault } from "../protocol/vault.js";
 import { blobSource } from "../protocol/sources.js";
 import { formatPairingCode, parsePairingInput } from "../protocol/pairing.js";
 import { PAIR_CODE_CHARS } from "../protocol/constants.js";
+import { shortId } from "../protocol/util.js";
 import { createHost, isNative } from "./host.js";
 import * as ui from "./ui.js";
 
@@ -231,6 +232,7 @@ function onProtocolEvent(event) {
       return;
 
     case "fallback":
+      if (event.id) upsert(event.id, { via: "relay", state: "connecting" });
       ui.toast(`No direct path to ${peerName(event.deviceId)} \u2014 using the encrypted relay`);
       return;
 
@@ -317,9 +319,23 @@ async function sendTo(deviceId) {
       }
     }
 
+    // The row goes up before anything is sent. Reaching the other device can
+    // take seconds, and a list that shows nothing in the meantime looks like a
+    // send that never started.
+    const id = shortId(16);
+    upsert(id, {
+      name: source.name,
+      direction: "send",
+      total: source.size,
+      state: "connecting",
+      via: client.isOnline(deviceId) ? undefined : "relay",
+      peerName: peerName(deviceId)
+    });
+
     try {
-      await client.send(deviceId, source);
+      await client.send(deviceId, source, { meta: { id } });
     } catch (error) {
+      upsert(id, { state: "failed", error: error.message });
       ui.toast(`${source.name}: ${error.message}`);
     } finally {
       // A share-sheet source holds an open handle on the other side of a
@@ -772,6 +788,7 @@ async function boot() {
   // the moment to re-check for anything that landed while it was away.
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && client) {
+      client.wake();
       client.collect().catch(() => {});
     }
   });

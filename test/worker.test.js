@@ -13,9 +13,12 @@ import { Miniflare } from "miniflare";
 import { createSyncDrop } from "../protocol/client.js";
 import { memoryStorage, openVault } from "../protocol/vault.js";
 import { bytesSource } from "../protocol/sources.js";
+import { createSignalingClient } from "../protocol/signaling.js";
+import { createIdentity } from "../protocol/identity.js";
 
-function startEdge() {
+function startEdge(bindings = {}) {
   return new Miniflare({
+    bindings,
     port: 0,
     modules: true,
     modulesRoot: process.cwd(),
@@ -235,4 +238,38 @@ test("cloudflare host: pairing, presence and relay on Durable Objects", async (t
     assert.equal(envelope.includes(secret), false, "the mailbox does not name the file either");
     assert.match(envelope, /"blobId"/);
   });
+});
+
+test("cloudflare host: a device that stops pinging is marked offline", async () => {
+  // The same object, with the sweep shortened from a minute to a second.
+  const edge = startEdge({ KEEPALIVE_STALE_MS: "1200", SWEEP_INTERVAL_MS: "300" });
+  const url = await edge.ready;
+  const socketUrl = (deviceId) => `ws://${url.host}/ws?d=${deviceId}`;
+
+  const watcher = await createIdentity({ name: "Desk", platform: "windows" });
+  const sleeper = await createIdentity({ name: "Phone", platform: "android" });
+  const heard = [];
+
+  const desk = createSignalingClient({
+    url: socketUrl(watcher.deviceId),
+    identity: watcher,
+    keepaliveMs: 200,
+    onPeer: (deviceId, online) => deviceId === sleeper.deviceId && heard.push(online)
+  });
+  // Pings once as it connects and then goes quiet, as a phone does when it
+  // sleeps with its socket still nominally open.
+  const phone = createSignalingClient({ url: socketUrl(sleeper.deviceId), identity: sleeper, keepaliveMs: 60000 });
+
+  try {
+    await phone.connect();
+    await desk.connect();
+    desk.watch([sleeper.deviceId]);
+    await waitFor(() => heard.includes(true), { label: "the phone online" });
+    await waitFor(() => heard.at(-1) === false, { label: "the phone marked offline" });
+    assert.ok(heard.indexOf(false) > heard.indexOf(true));
+  } finally {
+    desk.close();
+    phone.close();
+    await edge.dispose();
+  }
 });

@@ -193,6 +193,8 @@ export function renderActivity(state, { onSave, onReveal, onRetry }) {
       detail = transfer.error ?? "Failed";
     } else if (transfer.state === "queued") {
       detail = "Waiting for the other device to wake up";
+    } else if (transfer.state === "connecting") {
+      detail = transfer.via === "relay" ? "Sending through the relay" : "Connecting";
     } else {
       const remaining = transfer.rate > 0 ? (transfer.total - transfer.transferred) / transfer.rate : null;
       detail = [
