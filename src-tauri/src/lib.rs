@@ -2,6 +2,8 @@ mod files;
 mod inbox;
 mod llama;
 mod naming;
+#[cfg(target_os = "windows")]
+mod share;
 mod vault;
 
 use files::Downloads;
@@ -33,6 +35,11 @@ fn discard_service_workers(identifier: &str) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "windows")]
+    if share::relaunch_shared_files() {
+        return;
+    }
+
     let context = tauri::generate_context!();
 
     #[cfg(target_os = "windows")]

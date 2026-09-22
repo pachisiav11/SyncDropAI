@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+  <!-- Claims the identity registered from AppxManifest.xml. An exe outside the
+       package's external location, such as a dev build, simply runs without it. -->
+  <msix xmlns="urn:schemas-microsoft-com:msix.v1" publisher="CN=SyncDrop" packageName="SyncDrop" applicationId="SyncDrop" />
+</assembly>

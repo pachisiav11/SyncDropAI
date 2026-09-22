@@ -1,14 +1,17 @@
-; Puts SyncDrop where Windows expects a "share with" target to be.
+; Puts SyncDrop everywhere Windows offers to send a file somewhere else: the
+; Share dialog and Explorer's "Share with" menu, the "Send to" submenu, and the
+; right-click menu. All of it is per-user to match the currentUser install
+; mode, and all of it is removed again on uninstall.
 ;
-; Windows has no share sheet a plain desktop app can join - the Share contract
-; is only open to MSIX-packaged apps - so the two places users actually look
-; are the "Send to" submenu and the right-click menu. Both are registered here,
-; both per-user to match the currentUser install mode, and both removed again
-; on uninstall.
+; The Share contract only lists apps with a package identity. A package with
+; an external location gives this install one without moving a file: it
+; registers AppxManifest.xml and points it at $INSTDIR. Windows accepts an
+; unsigned one only in Developer Mode, so elsewhere the registration fails
+; quietly and the other two routes remain.
 ;
-; Either route starts SyncDrop with the file path on the command line. The
-; running window picks it up through the single-instance plugin, so sharing a
-; file never opens a second copy of the app.
+; Every route ends with SyncDrop holding the file paths. The running window
+; picks them up through the single-instance plugin, so sharing a file never
+; opens a second copy of the app.
 
 !macro NSIS_HOOK_POSTINSTALL
   SetShellVarContext current
@@ -21,6 +24,10 @@
   WriteRegStr HKCU "Software\Classes\*\shell\SyncDrop" "Icon" "$INSTDIR\SyncDrop.exe"
   WriteRegStr HKCU "Software\Classes\*\shell\SyncDrop" "MultiSelectModel" "Document"
   WriteRegStr HKCU "Software\Classes\*\shell\SyncDrop\command" "" '"$INSTDIR\SyncDrop.exe" "%1"'
+
+  ; Removed first so a reinstall over an older registration starts clean.
+  nsExec::Exec `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-AppxPackage -Name SyncDrop | Remove-AppxPackage; Add-AppxPackage -Register '$INSTDIR\AppxManifest.xml' -ExternalLocation '$INSTDIR'"`
+  Pop $0
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
@@ -28,4 +35,7 @@
 
   Delete "$SENDTO\SyncDrop.lnk"
   DeleteRegKey HKCU "Software\Classes\*\shell\SyncDrop"
+
+  nsExec::Exec `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-AppxPackage -Name SyncDrop | Remove-AppxPackage"`
+  Pop $0
 !macroend

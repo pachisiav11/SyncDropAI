@@ -30,7 +30,13 @@
     "active": true,
     "targets": ["nsis"],
     "resources": {
-      "../vendor/llama.cpp/": "vendor/llama.cpp/"
+      "../vendor/llama.cpp/": "vendor/llama.cpp/",
+      "windows/AppxManifest.xml": "AppxManifest.xml",
+      "windows/resources.pri": "resources.pri",
+      "windows/share/": "share/",
+      "icons/StoreLogo.png": "share/StoreLogo.png",
+      "icons/Square44x44Logo.png": "share/Square44x44Logo.png",
+      "icons/Square150x150Logo.png": "share/Square150x150Logo.png"
     },
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"],
     "windows": {

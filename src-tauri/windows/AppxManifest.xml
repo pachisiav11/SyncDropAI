@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A package with an external location: it holds no files of its own and points
+  at the ordinary install folder instead. What it adds is an identity, and the
+  identity is what Windows asks of an app before listing it as a Share target.
+  The installer registers it from the install folder; see installer-hooks.nsh.
+
+  Publisher, Name and the Application Id must match the msix element in
+  app.manifest, which is how the installed exe claims this identity.
+
+  resources.pri indexes the icons in share\, which is how the shell finds the
+  small variants that Explorer's "Share with" menu asks for; without it that
+  menu shows a blank page. Rebuild it with makepri when an icon changes, from
+  a folder laid out as the install is: this file with share\ beside it.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap10 desktop6 rescap">
+  <Identity Name="SyncDrop" Publisher="CN=SyncDrop" Version="2.0.0.0" ProcessorArchitecture="x64" />
+  <Properties>
+    <DisplayName>SyncDrop</DisplayName>
+    <PublisherDisplayName>SyncDrop</PublisherDisplayName>
+    <Logo>share\StoreLogo.png</Logo>
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
+    <!-- The vault and settings must stay where the app has always kept them. -->
+    <desktop6:FileSystemWriteVirtualization>disabled</desktop6:FileSystemWriteVirtualization>
+    <desktop6:RegistryWriteVirtualization>disabled</desktop6:RegistryWriteVirtualization>
+  </Properties>
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
+  </Capabilities>
+  <Applications>
+    <Application Id="SyncDrop" Executable="SyncDrop.exe" uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="win32App">
+      <uap:VisualElements
+        DisplayName="SyncDrop"
+        Description="Send files to your paired devices"
+        BackgroundColor="transparent"
+        Square150x150Logo="share\Square150x150Logo.png"
+        Square44x44Logo="share\Square44x44Logo.png"
+        AppListEntry="none" />
+      <Extensions>
+        <uap:Extension Category="windows.shareTarget">
+          <uap:ShareTarget Description="Send with SyncDrop">
+            <uap:SupportedFileTypes>
+              <uap:SupportsAnyFileType />
+            </uap:SupportedFileTypes>
+            <uap:DataFormat>StorageItems</uap:DataFormat>
+          </uap:ShareTarget>
+        </uap:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+</Package>
