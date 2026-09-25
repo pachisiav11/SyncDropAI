@@ -372,7 +372,8 @@ const handlers = {
   },
   onTarget: (deviceId) => sendTo(deviceId),
   onClear: () => {
-    state.pending = [];
+    // A share-sheet source stays on offer until it is released.
+    for (const source of state.pending.splice(0, state.pending.length)) source.close?.()?.catch(() => {});
     refresh();
   },
   onForget: async (deviceId) => {

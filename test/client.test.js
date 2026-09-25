@@ -116,6 +116,39 @@ function fakeWebRtc() {
   };
 }
 
+// Never opens and never fails: a socket Android let the app create while it
+// had the app frozen in the background.
+class StuckSocket {
+  constructor() {
+    this.readyState = 0;
+  }
+  send() {
+    throw new Error("Not open");
+  }
+  close() {
+    this.readyState = 3;
+  }
+}
+
+// Completes the handshake the way the relay does and then stays up.
+class GreetingSocket {
+  constructor() {
+    this.readyState = 0;
+    setTimeout(() => {
+      this.readyState = 1;
+      this.onmessage?.({ data: JSON.stringify({ type: "challenge", nonce: "n" }) });
+    });
+  }
+  send(text) {
+    if (JSON.parse(text).type === "auth") {
+      setTimeout(() => this.onmessage?.({ data: JSON.stringify({ type: "ready", mail: 0 }) }));
+    }
+  }
+  close() {
+    this.readyState = 3;
+  }
+}
+
 async function makeClient(serverUrl, name, platform, received) {
   const vault = await openVault(memoryStorage(), { name, platform });
   const client = createSyncDrop({
@@ -263,6 +296,42 @@ test("client: pairing, presence, relay fallback", async (t) => {
     assert.deepEqual(await phone.api.listMail(), [], "the envelope is acked once written");
   });
 
+  await t.test("a relayed file that lands while another is being collected is collected too", async () => {
+    let release;
+    const held = new Promise((resolve) => (release = resolve));
+    const events = [];
+    const toMemory = memorySink();
+    const vault = await openVault(memoryStorage(), { name: "Busy", platform: "windows" });
+    const busy = createSyncDrop({
+      vault,
+      serverUrl,
+      // The first file takes as long as the test says, the way a large one does.
+      createSink: (info) => {
+        const sink = toMemory(info);
+        if (info.name !== "long.bin") return sink;
+        return { ...sink, write: async (sequence, bytes) => (await held, sink.write(sequence, bytes)) };
+      },
+      onEvent: (event) => events.push(event)
+    });
+    await busy.start();
+    try {
+      const offer = busy.createPairingOffer();
+      await Promise.all([busy.pair(offer.code), phone.pair(offer.code)]);
+
+      await phone.send(busy.identity.deviceId, bytesSource({ name: "long.bin", bytes: randomBytes(4096) }), { prefer: "relay" });
+      await waitFor(events, (e) => e.type === "collecting");
+      await phone.send(busy.identity.deviceId, bytesSource({ name: "short.bin", bytes: randomBytes(64) }), { prefer: "relay" });
+      await new Promise((r) => setTimeout(r, 200));
+      release();
+
+      await waitFor(events, (e) => e.type === "collected" && e.name === "short.bin", 3000);
+      assert.ok(events.some((e) => e.type === "collected" && e.name === "long.bin"));
+    } finally {
+      busy.stop();
+      await phone.unpair(vault.identity.deviceId);
+    }
+  });
+
   await t.test("a runtime with no WebRTC goes straight to the relay", async () => {
     // Node has no RTCPeerConnection. There is no direct path to attempt, so the
     // send should not report a fallback from an attempt that never happened.
@@ -369,6 +438,44 @@ test("client: pairing, presence, relay fallback", async (t) => {
     }
   });
 
+  await t.test("a send made while the socket reconnects waits for it and goes direct", async () => {
+    globalThis.RTCPeerConnection = rtc.PeerConnection;
+    const sockets = [];
+    let stuck = false;
+    function PocketSocket(url) {
+      const socket = stuck ? new StuckSocket() : new WebSocket(url);
+      sockets.push(socket);
+      return socket;
+    }
+    const vault = await openVault(memoryStorage(), { name: "Pocket", platform: "android" });
+    const pocket = createSyncDrop({ vault, serverUrl, createSink: memorySink(), WebSocketImpl: PocketSocket });
+    await pocket.start();
+    try {
+      const offer = pocket.createPairingOffer();
+      await Promise.all([pocket.pair(offer.code), pc.pair(offer.code)]);
+      await until(() => pocket.isOnline(pc.identity.deviceId));
+
+      // The file picker is open: Android closes the socket and the retry it
+      // makes in the background goes nowhere.
+      stuck = true;
+      sockets.at(-1).close();
+      await until(() => sockets.at(-1) instanceof StuckSocket);
+
+      const sending = pocket.send(pc.identity.deviceId, bytesSource({ name: "picked.bin", bytes: randomBytes(4096) }));
+      await new Promise((r) => setTimeout(r, 100));
+      stuck = false;
+      pocket.wake();
+
+      const result = await sending;
+      assert.equal(result.via, "p2p", "direct, not pushed through the relay");
+      await waitFor(pcInbox, (e) => e.name === "picked.bin");
+    } finally {
+      pocket.stop();
+      await pc.unpair(vault.identity.deviceId);
+      delete globalThis.RTCPeerConnection;
+    }
+  });
+
   await t.test("a runtime with no WebRTC turns a direct offer down instead of crashing", async () => {
     // The phone here is a node client, as the CLI is. Dial it the way the
     // desktop app does when it sees the other device online.
@@ -467,10 +574,55 @@ test("signaling: a socket that stops answering is replaced", async () => {
   });
   try {
     await client.connect();
-    client.ping(50);
+    client.wake(50);
     await until(() => sockets.length === 2);
     assert.ok(statuses.includes("offline"), "the dead socket was reported");
     assert.equal(sockets[0].readyState, 3, "and closed");
+  } finally {
+    client.close();
+  }
+});
+
+test("signaling: a connection that never gets going is abandoned and retried", async () => {
+  const identity = await createIdentity({ name: "Frozen", platform: "android" });
+  const sockets = [];
+  function FirstStuck() {
+    const socket = sockets.length === 0 ? new StuckSocket() : new GreetingSocket();
+    sockets.push(socket);
+    return socket;
+  }
+  const client = createSignalingClient({
+    url: "ws://frozen.invalid/ws",
+    identity,
+    WebSocketImpl: FirstStuck,
+    handshakeTimeoutMs: 50
+  });
+  try {
+    await client.connect();
+    assert.equal(sockets.length, 2);
+    assert.equal(sockets[0].readyState, 3, "the stuck socket was closed");
+  } finally {
+    client.close();
+  }
+});
+
+test("signaling: waking with no session reconnects now, not at the next retry", async () => {
+  const identity = await createIdentity({ name: "Frozen", platform: "android" });
+  const sockets = [];
+  let stuck = true;
+  function Socket() {
+    const socket = stuck ? new StuckSocket() : new GreetingSocket();
+    sockets.push(socket);
+    return socket;
+  }
+  const client = createSignalingClient({ url: "ws://frozen.invalid/ws", identity, WebSocketImpl: Socket });
+  try {
+    const connected = client.connect();
+    stuck = false;
+    client.wake(50);
+    await connected;
+    assert.equal(sockets.length, 2);
+    assert.equal(sockets[0].readyState, 3, "the stuck attempt was dropped");
   } finally {
     client.close();
   }

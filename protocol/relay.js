@@ -25,7 +25,7 @@ import {
 import { CONTEXT, RELAY_PART_SIZE } from "./constants.js";
 import { createChunkDigest } from "./digest.js";
 import { signContext, verifyContext } from "./identity.js";
-import { b64u, canonicalBytes, concat, randomBytes, unb64u, utf8 } from "./util.js";
+import { b64u, canonicalBytes, concat, randomBytes, sleep, unb64u, utf8 } from "./util.js";
 
 const META_NONCE_BYTES = 12;
 
@@ -39,6 +39,24 @@ async function deriveKeys(secret, ephPub, boxPub) {
     hkdf(secret, { salt, info: CONTEXT.relayMeta, bytes: 32 })
   ]);
   return { contentKey: await importAesKey(content), metaKey: await importAesKey(meta) };
+}
+
+// A phone loses the network for a moment whenever it leaves the app, and one
+// failed request must not throw away the hundreds of megabytes already moved.
+// A refusal from the server is final; only a dropped connection or a server
+// error is worth asking again. Timers do not run while Android has the app
+// frozen, so the backoff also covers the time until the app comes back.
+const PART_ATTEMPTS = 6;
+
+async function withRetries(action) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await action();
+    } catch (error) {
+      if ((error.status && error.status < 500) || attempt === PART_ATTEMPTS) throw error;
+      await sleep(Math.min(1000 * 2 ** (attempt - 1), 15000));
+    }
+  }
 }
 
 // Every part is authenticated against its own index and its blob, so the server
@@ -71,49 +89,56 @@ export async function sendViaRelay({
     recipient: peer.deviceId
   });
 
-  let sent = 0;
-  for (let index = 0; index < parts; index += 1) {
-    const offset = index * partSize;
-    const plain = await source.readChunk(offset, Math.min(partSize, Math.max(0, source.size - offset)));
-    await digest.update(index, plain);
-    const sealed = await aesEncrypt(contentKey, partNonce(streamPrefix, index), plain, partAad(blob.blobId, index));
-    await api.putPart(blob.blobId, index, blob.writeToken, sealed);
-    sent += plain.length;
-    onProgress({ transferred: sent, total: source.size, part: index + 1, parts });
+  try {
+    let sent = 0;
+    for (let index = 0; index < parts; index += 1) {
+      const offset = index * partSize;
+      const plain = await source.readChunk(offset, Math.min(partSize, Math.max(0, source.size - offset)));
+      await digest.update(index, plain);
+      const sealed = await aesEncrypt(contentKey, partNonce(streamPrefix, index), plain, partAad(blob.blobId, index));
+      await withRetries(() => api.putPart(blob.blobId, index, blob.writeToken, sealed));
+      sent += plain.length;
+      onProgress({ transferred: sent, total: source.size, part: index + 1, parts });
+    }
+
+    await api.completeBlob(blob.blobId);
+
+    const metaNonce = randomBytes(META_NONCE_BYTES);
+    const metadata = {
+      name: source.name,
+      mime: source.mime ?? "application/octet-stream",
+      size: source.size,
+      partSize,
+      digest: await digest.final(),
+      sentAt: new Date().toISOString()
+    };
+    const sealedMeta = await aesEncrypt(metaKey, metaNonce, canonicalBytes(metadata));
+
+    // Everything a courier needs and nothing more. The name and type are inside
+    // sealedMeta; the server sees only sizes, ids and timing.
+    const envelope = {
+      v: 2,
+      blobId: blob.blobId,
+      readToken: blob.readToken,
+      parts,
+      partSize,
+      size: source.size,
+      ephPub: b64u(ephPub),
+      streamPrefix: b64u(streamPrefix),
+      metaNonce: b64u(metaNonce),
+      meta: b64u(sealedMeta),
+      sender: identity.deviceId
+    };
+    envelope.sig = await signContext(identity, CONTEXT.mailbox, envelope);
+
+    const queued = await api.sendMail(peer.deviceId, envelope);
+    return { id: queued.id, blobId: blob.blobId, parts, size: source.size, metadata };
+  } catch (error) {
+    // Parts nobody will collect would hold the relay's storage until they
+    // expire a week from now, and the free plan has a gigabyte in all.
+    await api.deleteBlob(blob.blobId).catch(() => {});
+    throw error;
   }
-
-  await api.completeBlob(blob.blobId);
-
-  const metaNonce = randomBytes(META_NONCE_BYTES);
-  const metadata = {
-    name: source.name,
-    mime: source.mime ?? "application/octet-stream",
-    size: source.size,
-    partSize,
-    digest: await digest.final(),
-    sentAt: new Date().toISOString()
-  };
-  const sealedMeta = await aesEncrypt(metaKey, metaNonce, canonicalBytes(metadata));
-
-  // Everything a courier needs and nothing more. The name and type are inside
-  // sealedMeta; the server sees only sizes, ids and timing.
-  const envelope = {
-    v: 2,
-    blobId: blob.blobId,
-    readToken: blob.readToken,
-    parts,
-    partSize,
-    size: source.size,
-    ephPub: b64u(ephPub),
-    streamPrefix: b64u(streamPrefix),
-    metaNonce: b64u(metaNonce),
-    meta: b64u(sealedMeta),
-    sender: identity.deviceId
-  };
-  envelope.sig = await signContext(identity, CONTEXT.mailbox, envelope);
-
-  const queued = await api.sendMail(peer.deviceId, envelope);
-  return { id: queued.id, blobId: blob.blobId, parts, size: source.size, metadata };
 }
 
 export async function openEnvelope({ identity, envelope, peer }) {
@@ -163,7 +188,7 @@ export async function receiveViaRelay({
 
   try {
     for (let index = 0; index < envelope.parts; index += 1) {
-      const sealed = await api.getPart(envelope.blobId, index, envelope.readToken);
+      const sealed = await withRetries(() => api.getPart(envelope.blobId, index, envelope.readToken));
       const plain = await aesDecrypt(contentKey, partNonce(streamPrefix, index), sealed, partAad(envelope.blobId, index));
       await digest.update(index, plain);
       await sink.write(index, plain);

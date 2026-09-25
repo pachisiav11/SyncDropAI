@@ -53,7 +53,7 @@ export async function takeNativeShares() {
         const { data } = await plugin.read({ id: file.id, offset, length });
         return decodeBase64(data ?? "");
       },
-      release: () => plugin.release({ id: file.id })
+      close: () => plugin.release({ id: file.id })
     })
   );
 }

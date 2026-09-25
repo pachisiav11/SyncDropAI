@@ -20,6 +20,10 @@ import { shortId } from "./util.js";
 
 // How long a returning app gives its socket to prove it survived the break.
 const WAKE_PING_TIMEOUT_MS = 5000;
+// A phone's socket is often mid-reconnect in the seconds after it comes back
+// from the file picker, and a direct link cannot be set up without it. Worth
+// waiting this long rather than pushing a large file through the relay.
+const SIGNALING_WAIT_MS = 10000;
 
 const idle = (entry) => !entry.session || (entry.session.active.outgoing === 0 && entry.session.active.incoming === 0);
 
@@ -41,6 +45,7 @@ export function createSyncDrop({
   createSink,
   autoAccept = () => true,
   iceServers,
+  WebSocketImpl,
   onEvent = () => {}
 }) {
   const identity = vault.identity;
@@ -49,6 +54,7 @@ export function createSyncDrop({
   const online = new Set();
   const pendingPairings = new Map();
   let collecting = false;
+  let collectAgain = false;
 
   const emit = (event) => {
     try {
@@ -61,6 +67,7 @@ export function createSyncDrop({
   const signaling = createSignalingClient({
     url: websocketUrl(serverUrl, identity.deviceId),
     identity,
+    WebSocketImpl,
     onStatus: (status, detail) => {
       // Our own socket dropping is how an app that was in the background finds
       // out it was away. The other side heard we went offline and closed its
@@ -198,17 +205,28 @@ export function createSyncDrop({
   }
 
   async function collect() {
-    if (collecting) return [];
+    if (collecting) {
+      // The pass under way listed the mailbox before this arrived, and a large
+      // file can keep it busy for minutes.
+      collectAgain = true;
+      return [];
+    }
     collecting = true;
     try {
-      return await collectMailbox({
-        api,
-        identity,
-        resolvePeer: async (deviceId) => vault.get(deviceId),
-        createSink: (info) => createSink({ ...info, via: "relay" }),
-        onProgress: (progress) => emit({ type: "progress", direction: "receive", via: "relay", ...progress }),
-        onEvent: (event) => emit({ ...event, via: "relay" })
-      });
+      const results = [];
+      do {
+        collectAgain = false;
+        const pass = await collectMailbox({
+          api,
+          identity,
+          resolvePeer: async (deviceId) => vault.get(deviceId),
+          createSink: (info) => createSink({ ...info, via: "relay" }),
+          onProgress: (progress) => emit({ type: "progress", direction: "receive", via: "relay", ...progress }),
+          onEvent: (event) => emit({ ...event, via: "relay" })
+        });
+        results.push(...pass);
+      } while (collectAgain);
+      return results;
     } finally {
       collecting = false;
     }
@@ -377,7 +395,13 @@ export function createSyncDrop({
       // direct path to attempt, so go straight to the relay rather than
       // reporting a fallback from an attempt that never happened.
       const canDirect = Boolean(globalThis.RTCPeerConnection);
-      const tryDirect = prefer !== "relay" && canDirect && online.has(deviceId);
+      if (prefer !== "relay" && canDirect && !signaling.ready) {
+        let timer;
+        const waited = new Promise((resolve) => (timer = setTimeout(resolve, SIGNALING_WAIT_MS)));
+        await Promise.race([signaling.connect(), waited]).catch(() => {});
+        clearTimeout(timer);
+      }
+      const tryDirect = prefer !== "relay" && canDirect && signaling.ready && online.has(deviceId);
       if (tryDirect) {
         try {
           return await sendDirect(deviceId, source, { ...meta, id });
@@ -412,7 +436,7 @@ export function createSyncDrop({
     // to the foreground: a socket that died meanwhile is found in seconds
     // rather than at the next keepalive.
     wake() {
-      signaling.ping(WAKE_PING_TIMEOUT_MS);
+      signaling.wake(WAKE_PING_TIMEOUT_MS);
     },
 
     stop() {

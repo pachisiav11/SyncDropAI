@@ -293,4 +293,82 @@ test("relay: an offline device collects a sealed transfer later", async (t) => {
       createSink: memorySink()
     });
   });
+
+  await t.test("a part that fails on the way is sent again rather than failing the file", async () => {
+    // The phone leaves the app mid-upload and one request dies with it; on the
+    // way down the server has a bad moment.
+    const failures = { "PUT 1": () => Promise.reject(new TypeError("Failed to fetch")), "GET 0": () => new Response("busy", { status: 503 }) };
+    const flaky = (url, init = {}) => {
+      const match = /\/blob\/[^/]+\/(\d+)\?/.exec(url);
+      const key = match && `${init.method ?? "GET"} ${match[1]}`;
+      const fail = failures[key];
+      delete failures[key];
+      return fail ? fail() : fetch(url, init);
+    };
+
+    const bytes = randomBytes(20000);
+    await sendViaRelay({
+      api: createApiClient({ baseUrl: base, identity: pc, fetchImpl: flaky }),
+      identity: pc,
+      peer: phonePeer,
+      source: bytesSource({ name: "commute.mp4", bytes }),
+      partSize: 8192
+    });
+    const collected = await collectMailbox({
+      api: createApiClient({ baseUrl: base, identity: phone, fetchImpl: flaky }),
+      identity: phone,
+      resolvePeer: async () => pcPeer,
+      createSink: memorySink()
+    });
+
+    assert.deepEqual(failures, {}, "both failures happened");
+    assert.equal(collected.length, 1);
+    assert.ok(equalBytes(collected[0].result.bytes, bytes));
+  });
+
+  await t.test("an upload that gives up takes its parts off the server", async () => {
+    let blobId = null;
+    const refuseSecondPart = (url, init = {}) => {
+      const match = /\/blob\/([^/]+)\/(\d+)\?/.exec(url);
+      if (match) blobId = match[1];
+      if (match?.[2] === "1") return Promise.resolve(new Response("{}", { status: 403 }));
+      return fetch(url, init);
+    };
+    await assert.rejects(() =>
+      sendViaRelay({
+        api: createApiClient({ baseUrl: base, identity: pc, fetchImpl: refuseSecondPart }),
+        identity: pc,
+        peer: phonePeer,
+        source: bytesSource({ name: "abandoned.bin", bytes: randomBytes(20000) }),
+        partSize: 8192
+      })
+    );
+    assert.ok(blobId);
+    assert.equal(await server.store.blobs.get(blobId), null, "the part that did arrive is gone");
+  });
+
+  await t.test("a part the server refuses is not asked for again", async () => {
+    await sendViaRelay({
+      api: pcApi,
+      identity: pc,
+      peer: phonePeer,
+      source: bytesSource({ name: "refused.bin", bytes: randomBytes(100) })
+    });
+    const events = [];
+    const started = Date.now();
+    await collectMailbox({
+      api: createApiClient({
+        baseUrl: base,
+        identity: phone,
+        fetchImpl: (url, init) => fetch(url.replace(/\?t=[^&]+/, "?t=wrong"), init)
+      }),
+      identity: phone,
+      resolvePeer: async () => pcPeer,
+      createSink: memorySink(),
+      onEvent: (event) => events.push(event)
+    });
+    assert.ok(events.some((e) => e.type === "failed" && /403/.test(e.error)), "the refusal is reported");
+    assert.ok(Date.now() - started < 1000, "with no backoff first");
+    await collectMailbox({ api: phoneApi, identity: phone, resolvePeer: async () => pcPeer, createSink: memorySink() });
+  });
 });

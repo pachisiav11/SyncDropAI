@@ -17,6 +17,9 @@ const RECONNECT_MAX_MS = 30000;
 // the pings that stop arriving.
 const KEEPALIVE_MS = 25000;
 const PONG_TIMEOUT_MS = 10000;
+// A socket opened while Android had the app frozen in the background can sit
+// half-open for minutes, neither connecting nor failing.
+const HANDSHAKE_TIMEOUT_MS = 10000;
 
 export function createSignalingClient({
   url,
@@ -28,7 +31,8 @@ export function createSignalingClient({
   onMail = () => {},
   onStatus = () => {},
   onJoined = () => {},
-  keepaliveMs = KEEPALIVE_MS
+  keepaliveMs = KEEPALIVE_MS,
+  handshakeTimeoutMs = HANDSHAKE_TIMEOUT_MS
 }) {
   if (!WebSocketImpl) throw new Error("No WebSocket implementation available");
 
@@ -81,16 +85,19 @@ export function createSignalingClient({
     const current = generation;
     pongTimer = setTimeout(() => {
       pongTimer = null;
-      if (current !== generation) return;
-      const dead = socket;
-      lost();
-      try {
-        dead?.close();
-      } catch {
-        // It is being abandoned either way.
-      }
+      if (current === generation) abandon();
     }, timeoutMs);
     pongTimer.unref?.();
+  }
+
+  function abandon() {
+    const dead = socket;
+    lost();
+    try {
+      dead?.close();
+    } catch {
+      // It is being abandoned either way.
+    }
   }
 
   function lost() {
@@ -104,7 +111,9 @@ export function createSignalingClient({
     // Full jitter, so a server restart does not bring every device back in
     // the same millisecond.
     const delay = wasReady ? Math.random() * RECONNECT_BASE_MS : Math.random() * backoff;
-    sleep(delay).then(open);
+    // A reconnect that wake() already made supersedes this one.
+    const scheduled = generation;
+    sleep(delay).then(() => scheduled === generation && open());
   }
 
   async function handle(message) {
@@ -162,6 +171,8 @@ export function createSignalingClient({
     setStatus("connecting");
     const ws = new WebSocketImpl(url);
     socket = ws;
+    const deadline = setTimeout(() => live() && !ready && abandon(), handshakeTimeoutMs);
+    deadline.unref?.();
     ws.onmessage = (event) => {
       if (!live()) return;
       clearTimeout(pongTimer);
@@ -210,9 +221,20 @@ export function createSignalingClient({
       if (ready) send({ type: "leave-pair", roomId });
     },
     // For a host that knows the socket may have died under it, such as an app
-    // coming back from the background.
-    ping(timeoutMs) {
-      probe(timeoutMs);
+    // coming back from the background. A live session gets a quick ping; with
+    // none, whatever attempt is in flight was likely made while the app was
+    // frozen, and the next scheduled one can be half a minute away.
+    wake(timeoutMs) {
+      if (closed) return;
+      if (ready) return probe(timeoutMs);
+      attempt = 0;
+      generation += 1;
+      try {
+        socket?.close();
+      } catch {
+        // Replaced either way.
+      }
+      open();
     },
     close() {
       closed = true;

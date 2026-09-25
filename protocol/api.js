@@ -43,12 +43,16 @@ export function createApiClient({ baseUrl, identity, fetchImpl = globalThis.fetc
         headers: { "content-type": "application/octet-stream" },
         body: bytes
       });
-      if (!response.ok) throw new Error(`Part ${index} upload failed with ${response.status}`);
+      if (!response.ok) {
+        throw Object.assign(new Error(`Part ${index} upload failed with ${response.status}`), { status: response.status });
+      }
       return response.json();
     },
     async getPart(blobId, index, token) {
       const response = await fetchImpl(`${root}/blob/${blobId}/${index}?t=${encodeURIComponent(token)}`);
-      if (!response.ok) throw new Error(`Part ${index} download failed with ${response.status}`);
+      if (!response.ok) {
+        throw Object.assign(new Error(`Part ${index} download failed with ${response.status}`), { status: response.status });
+      }
       return new Uint8Array(await response.arrayBuffer());
     },
 
