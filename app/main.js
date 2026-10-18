@@ -205,6 +205,7 @@ function onProtocolEvent(event) {
         result: event.result,
         peerName: peerName(event.from)
       });
+      notifyReceived(event.id);
       maybeAutoSave(event.id);
       return;
 
@@ -220,7 +221,10 @@ function onProtocolEvent(event) {
         route: event.route,
         peerName: peerName(event.deviceId ?? event.from)
       });
-      if (event.direction === "receive") maybeAutoSave(event.id);
+      if (event.direction === "receive") {
+        notifyReceived(event.id);
+        maybeAutoSave(event.id);
+      }
       return;
 
     case "failed":
@@ -247,6 +251,11 @@ function onProtocolEvent(event) {
     default:
       return;
   }
+}
+
+function notifyReceived(id) {
+  const transfer = state.transfers.get(id);
+  host.notifyReceived({ id, name: transfer.name, from: transfer.peerName });
 }
 
 // On the desktop a received file goes straight to Downloads. In a browser a

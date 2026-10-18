@@ -107,6 +107,9 @@ function tauriHost() {
 
     reveal: (path) => invoke("reveal", { path }),
 
+    // The desktop saves on arrival and says so in a toast.
+    notifyReceived: () => {},
+
     // Answers with the folder that would actually be used, so the settings
     // dialog can show the default instead of an empty box and can refuse a path
     // that is not there while it is still open.
@@ -166,6 +169,18 @@ function tauriHost() {
 
 // --- browser ----------------------------------------------------------------
 
+let notifyPlugin;
+
+// Same guard as the share and save plugins: only the Android build has it.
+function nativeNotifier() {
+  if (notifyPlugin !== undefined) return notifyPlugin;
+  const capacitor = globalThis.Capacitor;
+  notifyPlugin = capacitor?.isNativePlatform?.()
+    ? capacitor.Plugins?.Notify ?? capacitor.registerPlugin?.("Notify") ?? null
+    : null;
+  return notifyPlugin;
+}
+
 function browserHost(platform) {
   return {
     kind: "web",
@@ -176,6 +191,9 @@ function browserHost(platform) {
       return saveToDisk(result);
     },
     reveal: async () => {},
+    // A system notice per received file on the phone. A browser tab already
+    // shows the toast, and asking it for notification permission would be noise.
+    notifyReceived: (file) => nativeNotifier()?.received(file).catch(() => {}),
     // A browser and a phone put downloads where they put downloads; neither
     // lets a page choose, so there is nothing here to configure.
     resolveDownloadDir: async () => "",
