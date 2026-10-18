@@ -12,7 +12,7 @@ import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 
 /**
- * The two kinds of notice the phone shows, kept on separate channels.
+ * The notices the phone shows, on two channels.
  *
  * They are separate so that switching off the "Ready to receive" notice in the
  * system settings leaves the "File received" ones alone. Android still counts a
@@ -24,6 +24,8 @@ final class Notifications {
     static final String RECEIVED_CHANNEL = "received";
     static final String KEEP_ALIVE_CHANNEL = "keep_alive";
     private static final String RECEIVED_GROUP = "com.syncdrop.ai.RECEIVED";
+    // A tag gives the waiting notices their own id space.
+    private static final String WAITING_TAG = "waiting";
 
     static final int KEEP_ALIVE_ID = 1;
     private static final int SUMMARY_ID = 2;
@@ -93,6 +95,40 @@ final class Notifications {
         } catch (SecurityException ignored) {
             // The permission was revoked between the check above and here.
         }
+    }
+
+    /**
+     * Mail is waiting on the relay and the app is not running to collect it.
+     * One notice per sender, updated with a count as more arrive, and cleared
+     * once a file from that sender has actually been received.
+     */
+    static void waiting(Context context, String fromId, String fromName, int count) {
+        NotificationManagerCompat manager = NotificationManagerCompat.from(context);
+        if (!manager.areNotificationsEnabled()) return;
+
+        String title = count > 1 ? count + " files waiting" : "File waiting";
+        String text = "From " + fromName + ". Tap to receive.";
+        Notification notice = new NotificationCompat.Builder(context, RECEIVED_CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_syncdrop)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setContentIntent(openApp(context))
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
+            .build();
+        try {
+            manager.notify(WAITING_TAG, waitingId(fromId), notice);
+        } catch (SecurityException ignored) {
+            // The permission was revoked between the check above and here.
+        }
+    }
+
+    static void cancelWaiting(Context context, String fromId) {
+        NotificationManagerCompat.from(context).cancel(WAITING_TAG, waitingId(fromId));
+    }
+
+    private static int waitingId(String fromId) {
+        return fromId == null ? 0 : fromId.hashCode();
     }
 
     // Kept clear of the two fixed ids above.

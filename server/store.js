@@ -39,6 +39,7 @@ export function createMemoryStore() {
   const mailboxes = new Map();
   const blobs = new Map();
   const parts = new Map();
+  const pushTokens = new Map();
 
   const partKey = (blobId, index) => blobId + "/" + index;
 
@@ -72,6 +73,15 @@ export function createMemoryStore() {
       },
       async ack(to, id) {
         return Boolean(mailboxes.get(to)?.delete(id));
+      }
+    },
+    push: {
+      async put(deviceId, token) {
+        if (token) pushTokens.set(deviceId, token);
+        else pushTokens.delete(deviceId);
+      },
+      async get(deviceId) {
+        return pushTokens.get(deviceId) ?? null;
       }
     },
     blobs: {
@@ -131,7 +141,8 @@ export async function createDiskStore(directory) {
   const dirs = {
     devices: path.join(directory, "devices"),
     mailbox: path.join(directory, "mailbox"),
-    blobs: path.join(directory, "blobs")
+    blobs: path.join(directory, "blobs"),
+    push: path.join(directory, "push")
   };
   for (const dir of Object.values(dirs)) await fs.mkdir(dir, { recursive: true });
 
@@ -204,6 +215,16 @@ export async function createDiskStore(directory) {
         } catch {
           return false;
         }
+      }
+    },
+    push: {
+      async put(deviceId, token) {
+        const file = path.join(dirs.push, safe(deviceId) + ".json");
+        if (token) await writeJson(file, { token });
+        else await fs.rm(file, { force: true });
+      },
+      async get(deviceId) {
+        return (await readJson(path.join(dirs.push, safe(deviceId) + ".json")))?.token ?? null;
       }
     },
     blobs: {

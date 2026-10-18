@@ -77,6 +77,11 @@ Route 3 is why **only the sender needs to be awake**. You can send a file to
 your desktop from the train, close your phone, and the file is on the desktop
 when you get home.
 
+A phone is told, too. When mail lands for an Android phone, the relay sends it
+a push through Firebase Cloud Messaging, so even with SyncDrop swiped out of
+recent apps the phone shows "File waiting from Desk PC". Tapping it opens the
+app, which collects the file and shows the usual "File received" notice.
+
 ---
 
 ## How fast, and against what
@@ -199,6 +204,11 @@ file, the filename, the file type, or any key. There is a test that asserts
 exactly this: the storage the operator can read is searched for the filename and
 for the file's own bytes, and neither is there.
 
+The phone push goes through Google, and carries only the sender's device id.
+Google learns that something was sent to this phone, from which id, and when;
+the phone turns the id into a name from its own list of paired devices. No
+filename, size or content is in it.
+
 Content keys come from an ephemeral key agreement per transfer, so a device key
 that leaks tomorrow does not decrypt the files you sent today.
 
@@ -292,6 +302,11 @@ cd android && ./gradlew assembleDebug
 The APK lands in `android/app/build/outputs/apk/debug/`. Set `.env` before
 `npm run build`, or the phone will not know which relay to call.
 
+For push notices while the app is closed, put your Firebase project's
+`google-services.json` (Android app, package `com.syncdrop.ai`) in
+`android/app/` before building. It is git-ignored. Without it the APK still
+builds and works; it is only told about files while it is running.
+
 ### The command line
 
 ```bash
@@ -311,7 +326,13 @@ encrypted relay.
 
 The server does two things: it introduces devices to each other, and it holds
 encrypted parts for a device that is asleep. It has no database, no user table,
-and no secrets to configure, because there are no accounts to store.
+and no accounts, so nothing to configure for that.
+
+The one optional secret is a Firebase service-account key, which lets the relay
+wake a phone whose app is closed. On Cloudflare:
+`npx wrangler secret put FCM_SERVICE_ACCOUNT < key.json`. On your own machine:
+point `SYNCDROP_FCM_KEY` at the key file. Without it, everything works and the
+phone finds its mail the next time the app opens.
 
 **On your own machine, a VPS, or a Pi:**
 

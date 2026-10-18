@@ -62,6 +62,20 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Stay reachable so files sent from the user's own devices arrive while the app is in the background" />
         </service>
+
+        <!-- Wakes the app when the relay says mail is waiting, even after it
+             was swiped out of recents. -->
+        <service
+            android:name=".PushService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="received" />
     </application>
 
     <!-- Permissions -->

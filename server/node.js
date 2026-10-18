@@ -14,6 +14,7 @@ import { WebSocketServer } from "ws";
 
 import { Hub, createApi } from "./core.js";
 import { createDiskStore, createMemoryStore } from "./store.js";
+import { createFcmSender } from "./push.js";
 import { RELAY_PART_SIZE } from "../protocol/constants.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -94,12 +95,15 @@ export async function startServer({
   host = process.env.SYNCDROP_HOST || "0.0.0.0",
   dataDir = process.env.SYNCDROP_DATA || null,
   staticDir = null,
-  verbose = true
+  verbose = true,
+  // A Firebase service-account key file. Without one, closed phones are not woken.
+  fcmKeyFile = process.env.SYNCDROP_FCM_KEY || null,
+  push = fcmKeyFile ? createFcmSender(fs.readFileSync(fcmKeyFile, "utf8")) : null
 } = {}) {
   const log = verbose ? (...args) => console.log("[syncdrop]", ...args) : () => {};
   const store = dataDir ? await createDiskStore(dataDir) : createMemoryStore();
   const hub = new Hub({ store, log });
-  const api = createApi({ store, hub, log });
+  const api = createApi({ store, hub, log, push });
 
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, "http://" + (request.headers.host ?? "localhost"));

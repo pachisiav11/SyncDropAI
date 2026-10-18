@@ -273,3 +273,42 @@ test("cloudflare host: a device that stops pinging is marked offline", async () 
     await edge.dispose();
   }
 });
+
+test("cloudflare host: a device keeps its push token on its own object", async () => {
+  const edge = startEdge();
+  const url = await edge.ready;
+  const phoneIdentity = await createIdentity({ name: "Phone", platform: "android" });
+  const desk = await createIdentity({ name: "Desk", platform: "windows" });
+  const { signRequest } = await import("../protocol/auth.js");
+  const signed = async (identity, method, path, body) => {
+    const authorization = await signRequest(identity, method, path);
+    const response = await fetch(url.origin + path, {
+      method,
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    return { status: response.status, body: await response.json() };
+  };
+
+  // The relay learns a device's key from its socket handshake.
+  const phone = createSignalingClient({ url: `ws://${url.host}/ws?d=${phoneIdentity.deviceId}`, identity: phoneIdentity });
+  try {
+    await phone.connect();
+    const set = await signed(phoneIdentity, "POST", "/api/push", { token: "fcm-token" });
+    assert.equal(set.status, 200);
+    assert.equal(set.body.registered, true);
+
+    // No FCM key is bound here, so mail queues exactly as before.
+    const mailDesk = createSignalingClient({ url: `ws://${url.host}/ws?d=${desk.deviceId}`, identity: desk });
+    await mailDesk.connect();
+    const queued = await signed(desk, "POST", "/api/mailbox", { to: phoneIdentity.deviceId, envelope: { sealed: "x" } });
+    assert.equal(queued.status, 201);
+    mailDesk.close();
+
+    const cleared = await signed(phoneIdentity, "POST", "/api/push", { token: null });
+    assert.equal(cleared.body.registered, false);
+  } finally {
+    phone.close();
+    await edge.dispose();
+  }
+});

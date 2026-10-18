@@ -181,6 +181,15 @@ function nativeNotifier() {
   return notifyPlugin;
 }
 
+function nativePush(plugin) {
+  return {
+    pushToken: () => plugin.pushToken().then((result) => result?.token ?? null, () => null),
+    onPushToken: (handler) => plugin.addListener("pushToken", (event) => handler(event.token)),
+    onPushMail: (handler) => plugin.addListener("pushMail", () => handler()),
+    rememberPeers: (peers) => plugin.peers({ peers }).catch(() => {})
+  };
+}
+
 function browserHost(platform) {
   return {
     kind: "web",
@@ -194,6 +203,9 @@ function browserHost(platform) {
     // A system notice per received file on the phone. A browser tab already
     // shows the toast, and asking it for notification permission would be noise.
     notifyReceived: (file) => nativeNotifier()?.received(file).catch(() => {}),
+    // Only the Android build has these. A browser tab is woken by its own
+    // socket while it is open and by nothing once it is closed.
+    ...(nativeNotifier() ? nativePush(nativeNotifier()) : {}),
     // A browser and a phone put downloads where they put downloads; neither
     // lets a page choose, so there is nothing here to configure.
     resolveDownloadDir: async () => "",

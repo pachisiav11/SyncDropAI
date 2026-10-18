@@ -109,6 +109,12 @@ export class DeviceObject {
         if (existed) await this.state.storage.delete(key);
         return json({ acked: existed });
       }
+      case "push/get":
+        return json({ token: (await this.state.storage.get("pushToken")) ?? null });
+      case "push/put":
+        if (body.token) await this.state.storage.put("pushToken", body.token);
+        else await this.state.storage.delete("pushToken");
+        return json({ ok: true });
       default:
         return json({ error: "No such device route" }, 404);
     }

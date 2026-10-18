@@ -71,6 +71,14 @@ export function createWorkerStore(env) {
         return (await readJson(await post(device(to), "mail/ack", { id }))).acked;
       }
     },
+    push: {
+      async put(deviceId, token) {
+        await readJson(await post(device(deviceId), "push/put", { token }));
+      },
+      async get(deviceId) {
+        return (await readJson(await post(device(deviceId), "push/get"))).token;
+      }
+    },
     blobs: {
       async create(options) {
         const blobId = shortId(20);

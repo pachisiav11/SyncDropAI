@@ -13,6 +13,7 @@ import { createApi } from "../core.js";
 import { createWorkerHub, createWorkerStore } from "./store.js";
 import { RELAY_PART_SIZE, RELAY_TTL_DAYS } from "../../protocol/constants.js";
 import { partKey } from "./blob.js";
+import { createFcmSender } from "../push.js";
 
 const PART_TTL_SECONDS = RELAY_TTL_DAYS * 24 * 60 * 60;
 
@@ -38,6 +39,21 @@ const fail = (status, message) =>
   });
 
 const PART_PATH = /^\/blob\/([0-9A-Za-z_-]{1,64})\/(\d{1,6})$/;
+
+// Kept for the life of the isolate so the OAuth token it mints is reused
+// across requests instead of being signed for on every mail. Set the key with
+// `npx wrangler secret put FCM_SERVICE_ACCOUNT`; without it there is no push.
+let pusher = null;
+let pusherKey = null;
+
+function pushSender(env) {
+  if (!env.FCM_SERVICE_ACCOUNT) return null;
+  if (pusherKey !== env.FCM_SERVICE_ACCOUNT) {
+    pusher = createFcmSender(env.FCM_SERVICE_ACCOUNT);
+    pusherKey = env.FCM_SERVICE_ACCOUNT;
+  }
+  return pusher;
+}
 
 export default {
   async fetch(request, env, ctx) {
@@ -68,7 +84,14 @@ export default {
 
     if (url.pathname.startsWith("/api/")) {
       const hub = createWorkerHub(env);
-      const api = createApi({ store, hub });
+      const api = createApi({
+        store,
+        hub,
+        push: pushSender(env),
+        // The sender's request should not wait on Google.
+        defer: (work) => ctx.waitUntil(work),
+        log: (...args) => console.log(...args)
+      });
       const body =
         request.method === "GET" || request.method === "HEAD"
           ? null

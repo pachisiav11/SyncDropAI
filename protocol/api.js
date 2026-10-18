@@ -56,6 +56,9 @@ export function createApiClient({ baseUrl, identity, fetchImpl = globalThis.fetc
       return new Uint8Array(await response.arrayBuffer());
     },
 
+    // Where the relay can wake this device when mail lands; null forgets it.
+    registerPush: (token) => signed("POST", "/api/push", { body: { token } }),
+
     sendMail: (to, envelope) => signed("POST", "/api/mailbox", { body: { to, envelope } }),
     listMail: () => signed("GET", "/api/mailbox").then((r) => r.entries ?? []),
     ackMail: (id) => signed("POST", `/api/mailbox/${id}/ack`)

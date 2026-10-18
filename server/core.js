@@ -12,6 +12,8 @@ import { importPeer } from "../protocol/identity.js";
 
 const MAX_PAIR_ROOM_OCCUPANTS = 2;
 const MAX_CONTROL_BODY = 256 * 1024;
+// FCM registration tokens are about 160 characters today; this leaves room.
+const MAX_PUSH_TOKEN = 4096;
 
 export class Hub {
   constructor({ store, log = () => {} }) {
@@ -207,7 +209,11 @@ function fail(status, message) {
 // `hub` needs three methods and may answer any of them asynchronously, because
 // on Cloudflare each of them is a hop to another Durable Object rather than a
 // map lookup: isOnline(deviceId), notifyMail(deviceId, count), describe().
-export function createApi({ store, hub, log = () => {} }) {
+//
+// `push` is optional: an object whose send(token, data) wakes a closed app (see
+// server/push.js). `defer` lets a host finish that send after the response has
+// gone out; by default the request waits for it.
+export function createApi({ store, hub, log = () => {}, push = null, defer = (work) => work }) {
   const resolveDevice = async (deviceId) => {
     const record = await store.devices.get(deviceId);
     if (!record) return null;
@@ -221,6 +227,21 @@ export function createApi({ store, hub, log = () => {} }) {
   const authenticate = async (request) => {
     const header = request.headers.get("authorization");
     return verifyRequest(header, request.method, request.path, resolveDevice);
+  };
+
+  // Sent even when the recipient looks online. A phone swiped out of recents
+  // can leave its socket looking alive until the keepalive sweep, and a push
+  // the app did not need is something the phone drops on its own.
+  const wake = async (to, from) => {
+    if (!push) return;
+    try {
+      const token = await store.push.get(to);
+      if (!token) return;
+      const outcome = await push.send(token, { type: "mail", sender: from });
+      if (outcome === "gone") await store.push.put(to, null);
+    } catch (error) {
+      log("push failed for", to, error.message);
+    }
   };
 
   const readJsonBody = (request) => {
@@ -344,8 +365,21 @@ export function createApi({ store, hub, log = () => {} }) {
         const entry = await store.mailbox.push(body.to, body.envelope, caller.deviceId);
         const count = await store.mailbox.count(body.to);
         await hub.notifyMail(body.to, count);
+        await defer(wake(body.to, caller.deviceId));
         log("mail queued for", body.to);
         return json(201, { id: entry.id, queued: true, online: await hub.isOnline(body.to) });
+      }
+
+      // A device registers where it can be woken. Only its own signature can
+      // set or clear the token, and null clears it.
+      if (method === "POST" && path === "/api/push") {
+        const body = readJsonBody(request);
+        const token = body.token ?? null;
+        if (token !== null && (typeof token !== "string" || !token || token.length > MAX_PUSH_TOKEN)) {
+          return fail(400, "Invalid push token");
+        }
+        await store.push.put(caller.deviceId, token);
+        return json(200, { registered: token !== null });
       }
 
       if (method === "GET" && path === "/api/mailbox") {

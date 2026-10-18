@@ -27,3 +27,8 @@ android/capacitor-cordova-android-plugins/
 
 vendor/
 models/
+installers/
+
+# Firebase: the app config stays local, and a service-account key never belongs in the tree.
+android/app/google-services.json
+*firebase-adminsdk*.json

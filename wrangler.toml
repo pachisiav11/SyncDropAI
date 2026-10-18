@@ -15,10 +15,13 @@
 # KV's 25 MiB value limit comfortably covers an 8 MiB relay part, and its
 # per-key expirationTtl gives parts the same self-cleaning expiry R2 had.
 #
-# There is nothing else to provision. No database, no auth provider, no
-# secrets: devices authenticate by signing with keys they generated
-# themselves, so there is no credential on this side to configure, rotate, or
-# leak.
+# There is nothing else to provision. No database and no auth provider:
+# devices authenticate by signing with keys they generated themselves.
+#
+# One optional secret: a Firebase service-account key, which lets the relay
+# wake a phone whose app is closed when mail arrives for it. Without it
+# everything else works and the phone finds its mail when the app next opens.
+#   npx wrangler secret put FCM_SERVICE_ACCOUNT < service-account.json
 
 name = "syncdrop"
 main = "server/worker/index.js"

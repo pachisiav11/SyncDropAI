@@ -139,7 +139,10 @@ function onProtocolEvent(event) {
       // "offline" and "connecting" between attempts, and the card must not blink.
       let notice = state.connectError;
       if (event.status === "error") notice = event.detail ?? "Connection failed";
-      if (event.status === "ready") notice = "";
+      if (event.status === "ready") {
+        notice = "";
+        registerPush();
+      }
 
       if (notice !== state.connectError) {
         state.connectError = notice;
@@ -150,8 +153,12 @@ function onProtocolEvent(event) {
       return;
     }
 
-    case "presence":
     case "paired":
+      rememberPeers();
+      refresh();
+      return;
+
+    case "presence":
     case "connected":
       refresh();
       return;
@@ -205,7 +212,7 @@ function onProtocolEvent(event) {
         result: event.result,
         peerName: peerName(event.from)
       });
-      notifyReceived(event.id);
+      notifyReceived(event.id, event.from);
       maybeAutoSave(event.id);
       return;
 
@@ -222,7 +229,7 @@ function onProtocolEvent(event) {
         peerName: peerName(event.deviceId ?? event.from)
       });
       if (event.direction === "receive") {
-        notifyReceived(event.id);
+        notifyReceived(event.id, event.deviceId ?? event.from);
         maybeAutoSave(event.id);
       }
       return;
@@ -253,9 +260,50 @@ function onProtocolEvent(event) {
   }
 }
 
-function notifyReceived(id) {
+function notifyReceived(id, fromId) {
   const transfer = state.transfers.get(id);
-  host.notifyReceived({ id, name: transfer.name, from: transfer.peerName });
+  host.notifyReceived({ id, name: transfer.name, from: transfer.peerName, fromId });
+}
+
+// --- push -------------------------------------------------------------------
+
+// The Android build holds an FCM token, which lets the relay wake the phone
+// when mail lands while the app is closed. It is registered once per start,
+// after the socket is up, because the relay only knows this device's key once
+// it has authenticated; and again whenever Firebase rotates the token.
+let pushToken = null;
+let pushRegistered = false;
+
+function registerPush() {
+  if (!pushToken || pushRegistered || state.status !== "ready") return;
+  pushRegistered = true;
+  client.api.registerPush(pushToken).catch(() => {
+    pushRegistered = false;
+  });
+}
+
+// The phone names the sender of a push from this list, since the push itself
+// carries only a device id.
+function rememberPeers() {
+  host.rememberPeers?.(client.peers().map(({ deviceId, name }) => ({ deviceId, name })));
+}
+
+async function setupPush() {
+  if (!host.pushToken) return;
+  rememberPeers();
+  host.onPushToken((token) => {
+    pushToken = token;
+    pushRegistered = false;
+    registerPush();
+  });
+  // A push that reaches a running app is the relay's word that mail is
+  // waiting; collect now in case the socket missed it.
+  host.onPushMail(() => {
+    client.wake();
+    client.collect().catch(() => {});
+  });
+  pushToken = (await host.pushToken()) ?? pushToken;
+  registerPush();
 }
 
 // On the desktop a received file goes straight to Downloads. In a browser a
@@ -387,6 +435,7 @@ const handlers = {
   },
   onForget: async (deviceId) => {
     await client.unpair(deviceId);
+    rememberPeers();
     ui.toast("Device forgotten");
     refresh();
   },
@@ -768,6 +817,7 @@ async function boot() {
   setupSettings();
   setupPicker();
   setupNamer();
+  setupPush().catch(() => {});
   refresh();
 
   await host.sweep?.();
