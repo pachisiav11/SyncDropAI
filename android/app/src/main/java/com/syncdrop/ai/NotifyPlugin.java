@@ -18,9 +18,12 @@ import com.google.firebase.messaging.FirebaseMessaging;
 @CapacitorPlugin(name = "Notify")
 public class NotifyPlugin extends Plugin {
 
-    // Set while a WebView is up to receive events. PushService reads it to
-    // decide between waking the page and posting a notice of its own.
+    // Set while a WebView is up to receive events.
     private static volatile NotifyPlugin live;
+    // Set while the app is on screen. A page that is alive but off screen may
+    // be frozen by the system and never get to collect, so it is not trusted
+    // to show the notice on its own.
+    private static volatile boolean onScreen;
 
     @Override
     public void load() {
@@ -28,17 +31,33 @@ public class NotifyPlugin extends Plugin {
     }
 
     @Override
+    protected void handleOnResume() {
+        super.handleOnResume();
+        onScreen = true;
+    }
+
+    @Override
+    protected void handleOnPause() {
+        onScreen = false;
+        super.handleOnPause();
+    }
+
+    @Override
     protected void handleOnDestroy() {
+        onScreen = false;
         if (live == this) live = null;
         super.handleOnDestroy();
     }
 
-    /** Returns false when no page is running to take the push. */
+    /**
+     * Wakes a running page to collect at once. Returns true only when the app
+     * is on screen, where the page's own "File received" notice is enough.
+     */
     static boolean deliverMail() {
         NotifyPlugin plugin = live;
         if (plugin == null) return false;
         plugin.emit("pushMail", new JSObject());
-        return true;
+        return onScreen;
     }
 
     static void deliverToken(String token) {

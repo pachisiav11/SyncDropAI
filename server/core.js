@@ -236,8 +236,9 @@ export function createApi({ store, hub, log = () => {}, push = null, defer = (wo
     if (!push) return;
     try {
       const token = await store.push.get(to);
-      if (!token) return;
+      if (!token) return log("no push token for", to);
       const outcome = await push.send(token, { type: "mail", sender: from });
+      log("push", outcome, "for", to);
       if (outcome === "gone") await store.push.put(to, null);
     } catch (error) {
       log("push failed for", to, error.message);

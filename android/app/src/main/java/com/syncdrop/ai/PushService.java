@@ -21,9 +21,10 @@ import java.util.Map;
  * the sender's device id, never a file name: the file is still sealed on the
  * relay, and only the app can open it.
  *
- * When the app is running, the push is handed to it so it collects at once and
- * shows the usual "File received" notice. When it is not, a "File waiting"
- * notice stands in until the user opens it.
+ * A running app is told to collect at once. Unless it is on screen, a "File
+ * waiting" notice goes up as well: off screen, the system may have frozen the
+ * page, and then nothing would show until the app was opened. The page's own
+ * "File received" notice replaces it once the file is in.
  */
 public class PushService extends FirebaseMessagingService {
 
